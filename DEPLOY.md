@@ -17,7 +17,8 @@ nano .env        # set APP_PASSWORD, SECRET_KEY, YNAB_TOKEN
 docker compose up -d --build
 ```
 
-The app is now on port 8000. `data/conversions.json` (the only persistent
+The app now listens on `127.0.0.1:8000` (localhost only — not reachable
+from the internet until you set up one of the access options below). `data/conversions.json` (the only persistent
 state) lives in `./data` on the host — back it up if you care about your
 conversion configs; losing it never touches your YNAB data.
 
@@ -33,8 +34,8 @@ docker compose up -d --build
 The app has password auth, but don't serve it over plain HTTP on the open
 internet. Pick one:
 
-**Option A — keep it private (simplest):** don't open port 8000 in the
-firewall; reach it through an SSH tunnel when you need it:
+**Option A — keep it private (simplest):** the app already binds to
+localhost only; reach it through an SSH tunnel when you need it:
 
 ```bash
 ssh -L 8000:localhost:8000 you@your-linode

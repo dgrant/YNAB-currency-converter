@@ -2,7 +2,9 @@ services:
   app:
     build: .
     ports:
-      - "8000:8000"
+      # Bound to localhost so the app isn't exposed publicly over plain HTTP;
+      # reach it via SSH tunnel or put Caddy/nginx in front (see DEPLOY.md).
+      - "127.0.0.1:8000:8000"
     env_file: .env
     volumes:
       - ./data:/srv/data
