@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>Conversions</h1>
+  <a class="button primary" href="/conversions/new">New conversion</a>
+</div>
+{% if conversions %}
+<table>
+  <thead>
+    <tr>
+      <th>Account</th>
+      <th>Budget</th>
+      <th>Currencies</th>
+      <th>Start date</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in conversions %}
+    <tr>
+      <td><a href="/conversions/{{ c.id }}">{{ c.account_name }}</a></td>
+      <td>{{ c.budget_name }}</td>
+      <td>{{ c.from_currency }} → {{ c.to_currency }}</td>
+      <td>{{ c.start_date }}</td>
+      <td>
+        <form method="post" action="/conversions/{{ c.id }}/delete"
+              onsubmit="return confirm('Delete this conversion? (YNAB data is not touched.)')">
+          <button type="submit" class="link danger">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="card">
+  <p>No conversions configured yet.</p>
+  <p>A conversion watches one YNAB account whose transactions you enter in a
+     foreign currency, converts each transaction to your budget's currency
+     using the exchange rate of the transaction date, and updates it in YNAB.</p>
+</div>
+{% endif %}
+{% endblock %}

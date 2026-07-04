@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>Preview: {{ conversion.account_name }}</h1>
+  <a href="/conversions/{{ conversion.id }}">← Back</a>
+</div>
+{% if rows %}
+<p>{{ rows | length }} unconverted transaction{{ "s" if rows | length != 1 }}
+   ({{ total_fetched }} fetched since {{ conversion.start_date }}).
+   Review and untick anything you don't want converted.</p>
+<form method="post" action="/conversions/{{ conversion.id }}/apply">
+  <table>
+    <thead>
+      <tr>
+        <th><input type="checkbox" checked onclick="document.querySelectorAll('.row-check').forEach(c => c.checked = this.checked)"></th>
+        <th>Date</th>
+        <th>Payee</th>
+        <th>Memo</th>
+        <th class="num">Original ({{ conversion.from_currency }})</th>
+        <th class="num">Rate</th>
+        <th class="num">Converted ({{ conversion.to_currency }})</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>
+          <input type="checkbox" class="row-check" name="selected" value="{{ row.id }}" checked>
+          <input type="hidden" name="amount_{{ row.id }}" value="{{ row.new_milliunits }}">
+          <input type="hidden" name="memo_{{ row.id }}" value="{{ row.new_memo }}">
+        </td>
+        <td>{{ row.date }}</td>
+        <td>{{ row.payee_name }}</td>
+        <td class="memo">{{ row.old_memo }}</td>
+        <td class="num">{{ row.original_display }}</td>
+        <td class="num">{{ row.rate_display }}</td>
+        <td class="num">{{ "%.2f" | format(row.new_milliunits / 1000) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <button type="submit" class="primary">Approve selected &amp; update YNAB</button>
+</form>
+{% else %}
+<div class="card">
+  <p>Nothing to convert — all {{ total_fetched }} transaction{{ "s" if total_fetched != 1 }}
+     since {{ conversion.start_date }} are already converted (or the account has none).</p>
+</div>
+{% endif %}
+{% endblock %}

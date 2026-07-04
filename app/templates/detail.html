@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ conversion.account_name }}</h1>
+  <a href="/conversions">← All conversions</a>
+</div>
+<div class="card">
+  <dl>
+    <dt>Budget</dt><dd>{{ conversion.budget_name }}</dd>
+    <dt>Conversion</dt><dd>{{ conversion.from_currency }} → {{ conversion.to_currency }}</dd>
+    <dt>Start date</dt><dd>{{ conversion.start_date }}</dd>
+  </dl>
+  <form method="post" action="/conversions/{{ conversion.id }}/preview">
+    <button type="submit" class="primary">Preview sync</button>
+  </form>
+  <p class="hint">Preview fetches this account's transactions from YNAB (since the
+     start date), skips any already carrying an <code>(FX rate: …)</code> memo,
+     and shows the proposed conversions. Nothing is written to YNAB until you approve.</p>
+</div>
+{% endblock %}
