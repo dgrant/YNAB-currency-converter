@@ -1,6 +1,6 @@
 -r requirements.txt
 pytest>=8.0
 respx>=0.21
-playwright>=1.45
+playwright>=1.61.0
 ruff>=0.5
 mypy>=1.10
