@@ -66,10 +66,26 @@ def _form_context() -> dict:
     return {"budgets": budgets, "currencies": currencies, "today": date.today().isoformat()}
 
 
+def _used_account_ids(except_conversion_id: str | None = None) -> list[str]:
+    """Account ids that already have a conversion (an account gets at most one)."""
+    return sorted(
+        c["account_id"]
+        for c in get_store().load()
+        if c["id"] != except_conversion_id
+    )
+
+
+def _reject_duplicate_account(account_id: str, except_conversion_id: str | None = None) -> None:
+    if account_id in _used_account_ids(except_conversion_id):
+        raise HTTPException(409, "That account already has a conversion configured")
+
+
 @router.get("/conversions/new")
 def new_form(request: Request):
     return templates.TemplateResponse(
-        request, "conversion_form.html", {**_form_context(), "conversion": None}
+        request,
+        "conversion_form.html",
+        {**_form_context(), "conversion": None, "used_account_ids": _used_account_ids()},
     )
 
 
@@ -84,6 +100,7 @@ def create(
     start_date: str = Form(...),
 ):
     date.fromisoformat(start_date)
+    _reject_duplicate_account(account_id)
     conversion = get_store().add(
         {
             "budget_id": budget_id,
@@ -115,7 +132,13 @@ def detail(request: Request, conversion_id: str):
 def edit_form(request: Request, conversion_id: str):
     conversion = _get_conversion_or_404(conversion_id)
     return templates.TemplateResponse(
-        request, "conversion_form.html", {**_form_context(), "conversion": conversion}
+        request,
+        "conversion_form.html",
+        {
+            **_form_context(),
+            "conversion": conversion,
+            "used_account_ids": _used_account_ids(except_conversion_id=conversion_id),
+        },
     )
 
 
@@ -131,6 +154,7 @@ def edit(
     start_date: str = Form(...),
 ):
     date.fromisoformat(start_date)
+    _reject_duplicate_account(account_id, except_conversion_id=conversion_id)
     updated = get_store().update(
         conversion_id,
         {

@@ -43,6 +43,7 @@
 <script>
   const budgets = {{ budgets | tojson }};
   const conversion = {{ conversion | tojson }};
+  const usedAccountIds = new Set({{ used_account_ids | tojson }});
   const budgetSelect = document.getElementById("budget");
   const accountSelect = document.getElementById("account");
   const fromCurrency = document.getElementById("from_currency");
@@ -56,7 +57,17 @@
     const budget = budgets.find(b => b.id === budgetSelect.value);
     accountSelect.innerHTML = "";
     for (const a of (budget ? budget.accounts : [])) {
-      accountSelect.add(new Option(a.name, a.id));
+      const option = new Option(a.name, a.id);
+      if (usedAccountIds.has(a.id)) {
+        option.disabled = true;
+        option.text += " — already has a conversion";
+      }
+      accountSelect.add(option);
+    }
+    // don't leave a disabled option preselected
+    if (accountSelect.selectedOptions[0]?.disabled) {
+      const firstEnabled = [...accountSelect.options].find(o => !o.disabled);
+      accountSelect.value = firstEnabled ? firstEnabled.value : "";
     }
     if (budget && budget.currency) {
       toCurrency.value = budget.currency;

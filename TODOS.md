@@ -39,16 +39,33 @@ not break (memo marker format, milliunit math, preview→approve contract).
       the password routes with an OIDC flow that sets the same `authed`
       session key for allowlisted emails; `require_login` stays as-is.
 - [ ] **YNAB OAuth** instead of a personal access token. Prerequisite for
-      multi-user; also removes the long-lived token from `.env`.
-- [ ] **Multi-user.** Per-user YNAB credentials and conversion lists. This is
-      the point where `data/conversions.json` should become SQLite — don't
-      add a database before this.
+      multi-user; also removes the long-lived token from `.env`. Confirmed
+      how ynab.rmillan.com does it (2026-07): a "Connect to YNAB" button
+      linking to `https://app.youneedabudget.com/oauth/authorize?client_id=…
+      &response_type=code&redirect_uri=https://ynab.rmillan.com/oauth` —
+      the standard authorization-code flow. End users need no API key; they
+      just click Authorize in YNAB. The app owner registers an OAuth
+      application once (free, YNAB Developer Settings) to get the
+      client id/secret and set the redirect URI. Implementation here:
+      `/oauth/start` + `/oauth/callback` routes, exchange code for
+      access+refresh tokens, store per user, refresh on expiry;
+      `YNABClient` already takes a bearer token so only token acquisition
+      changes.
+- [ ] **Multi-user.** Per-user YNAB credentials and conversion lists. Order
+      of work: YNAB OAuth first (per-user tokens), then real sign-in
+      (Google via `auth.py`, or email+password like rmillan's Devise
+      signup), then scope conversions by user. This is the point where
+      `data/conversions.json` should become SQLite — don't add a database
+      before this.
 - [ ] **Crypto / non-ECB currencies.** Frankfurter is ~30 fiat currencies
       (ECB data). Add a second rate source behind the `RateTable` interface
       (e.g. CoinGecko for crypto) and pick per conversion.
 
 ## Correctness & robustness
 
+- [x] **One conversion per account.** Done: the new/edit forms disable
+      accounts that already have a conversion, and create/edit reject
+      duplicates server-side with a 409.
 - [ ] **Handle split transactions.** `build_preview` converts any transaction
       by its top-level `amount`, but a YNAB split's subtransactions must sum
       to the parent. Patching a split parent's amount will be rejected or

@@ -128,11 +128,16 @@ def test_edit_conversion(app_client):
     }, follow_redirects=False)
     conversion_id = response.headers["location"].rsplit("/", 1)[-1]
 
-    # the edit form renders prefilled with the existing conversion
+    # the new form now marks a1 as taken…
+    new_form = app_client.get("/conversions/new")
+    assert 'new Set(["a1"])' in new_form.text
+
+    # …but the edit form keeps the conversion's own account selectable
     form = app_client.get(f"/conversions/{conversion_id}/edit")
     assert form.status_code == 200
     assert "Edit conversion" in form.text
     assert 'value="2024-01-01"' in form.text  # start_date prefilled
+    assert "new Set([])" in form.text
 
     response = app_client.post(f"/conversions/{conversion_id}/edit", data={
         "budget_id": "b1", "budget_name": "My Budget",
@@ -156,3 +161,29 @@ def test_edit_conversion(app_client):
         "from_currency": "JPY", "to_currency": "USD",
         "start_date": "2024-01-01",
     }).status_code == 404
+
+
+def test_duplicate_account_rejected(app_client):
+    login(app_client)
+    japan = {
+        "budget_id": "b1", "budget_name": "My Budget",
+        "account_id": "a1", "account_name": "Japan Trip",
+        "from_currency": "JPY", "to_currency": "USD",
+        "start_date": "2024-01-01",
+    }
+    assert app_client.post("/conversions", data=japan, follow_redirects=False).status_code == 303
+
+    # a second conversion for the same account is rejected
+    assert app_client.post("/conversions", data=japan).status_code == 409
+
+    # so is editing another conversion onto that account
+    europe = {**japan, "account_id": "a2", "account_name": "Europe Trip", "from_currency": "EUR"}
+    response = app_client.post("/conversions", data=europe, follow_redirects=False)
+    europe_id = response.headers["location"].rsplit("/", 1)[-1]
+    assert app_client.post(f"/conversions/{europe_id}/edit", data=japan).status_code == 409
+
+    # editing a conversion without changing its account stays allowed
+    updated = {**europe, "start_date": "2024-02-01"}
+    assert app_client.post(
+        f"/conversions/{europe_id}/edit", data=updated, follow_redirects=False
+    ).status_code == 303
