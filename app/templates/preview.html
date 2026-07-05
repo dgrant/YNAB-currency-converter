@@ -78,6 +78,7 @@
   <button type="submit" class="primary">Approve selected &amp; update YNAB</button>
 </form>
 <script>
+  const fromCurrency = {{ conversion.from_currency | tojson }};
   const fmtOriginal = new Intl.NumberFormat("en-US",
     {minimumFractionDigits: {{ from_digits }}, maximumFractionDigits: {{ from_digits }}});
   const fmtConverted = new Intl.NumberFormat("en-US",
@@ -99,7 +100,7 @@
     document.getElementById("total-label").textContent =
       `Total to convert (${count} row${count === 1 ? "" : "s"})`;
     document.getElementById("total-original").textContent =
-      count ? `${fmtOriginal.format(original / 1000)} {{ conversion.from_currency }}` : "—";
+      count ? `${fmtOriginal.format(original / 1000)} ${fromCurrency}` : "—";
     document.getElementById("total-converted").textContent =
       count ? fmtConverted.format(converted / 1000) : "—";
   }

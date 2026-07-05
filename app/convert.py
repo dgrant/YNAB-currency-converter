@@ -104,15 +104,29 @@ def build_marker(milliunits: int, from_currency: str, rate: float) -> str:
     return f"{format_original(milliunits, from_currency)} (FX rate: {format_rate(rate)})"
 
 
+def _truncate_bytes(text: str, max_bytes: int) -> str:
+    """Longest prefix of text whose UTF-8 encoding is <= max_bytes, never
+    splitting a multi-byte character."""
+    encoded = text.encode()
+    if len(encoded) <= max_bytes:
+        return text
+    return encoded[:max_bytes].decode(errors="ignore")
+
+
 def _append_marker(old_memo: str | None, marker: str) -> str:
     """Append a marker, truncating the original memo if needed so the marker —
     which future previews rely on to exclude the transaction — always survives
-    YNAB's 500-char memo limit intact."""
+    YNAB's memo limit intact. Budgeted in UTF-8 bytes so a multi-byte memo (or
+    the multi-byte '≈' in an equivalence marker) can't push the result past the
+    cap and amputate the marker, whether YNAB counts the 500 as bytes or chars."""
+    marker_bytes = len(marker.encode())
     if not old_memo:
-        return marker
-    room = MEMO_MAX - len(marker) - 1
-    if len(old_memo) > room:
-        old_memo = old_memo[:room].rstrip()
+        return _truncate_bytes(marker, MEMO_MAX)
+    room = MEMO_MAX - marker_bytes - 1  # 1 byte for the separating space
+    if room <= 0:  # marker alone fills the field (unreachable with real markers)
+        return _truncate_bytes(marker, MEMO_MAX)
+    if len(old_memo.encode()) > room:
+        old_memo = _truncate_bytes(old_memo, room).rstrip()
     return f"{old_memo} {marker}"
 
 

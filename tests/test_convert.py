@@ -50,17 +50,20 @@ class TestMarkerDetection:
 
     def test_marker_survives_memo_length_limit(self):
         # A near-limit memo must be truncated so the appended marker — which
-        # future previews rely on — survives YNAB's 500-char cap intact.
-        long_memo = "x" * 495
-        for memo in (
-            build_memo(long_memo, -1817000, "JPY", 0.0087987),
-            build_already_memo(long_memo, 331754000, "JPY", 0.0087987),
-            build_skip_memo(long_memo),
-        ):
-            assert len(memo) <= 500
-        assert is_converted(build_memo(long_memo, -1817000, "JPY", 0.0087987))
-        assert is_converted(build_already_memo(long_memo, 331754000, "JPY", 0.0087987))
-        assert is_skipped(build_skip_memo(long_memo))
+        # future previews rely on — survives YNAB's 500 cap intact, whether
+        # that cap is counted in bytes or characters.
+        for long_memo in ("x" * 495, "あ" * 495):  # ascii and 3-byte-per-char
+            memos = (
+                build_memo(long_memo, -1817000, "JPY", 0.0087987),
+                build_already_memo(long_memo, 331754000, "JPY", 0.0087987),
+                build_skip_memo(long_memo),
+            )
+            for memo in memos:
+                assert len(memo) <= 500
+                assert len(memo.encode()) <= 500  # byte-safe: '≈' is 3 bytes
+            assert is_converted(memos[0])
+            assert is_converted(memos[1])  # the '≈ …(FX rate: …)' marker intact
+            assert is_skipped(memos[2])
 
     def test_skip_memo_roundtrips(self):
         assert build_skip_memo(None) == "(skipped)"

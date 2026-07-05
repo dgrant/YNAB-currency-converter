@@ -278,6 +278,42 @@ def test_already_in_budget_currency_and_skip_actions(app_client):
 
 
 @respx.mock
+def test_from_currency_is_escaped_in_preview_script(app_client):
+    # from_currency isn't validated on create, and it flows into an inline
+    # <script>; it must be JSON-escaped so a crafted value can't break out of
+    # the JS string or inject markup.
+    mock_budgets()
+    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": [
+            {"id": "t1", "date": "2024-01-05", "amount": -1817000,
+             "payee_name": "Ramen", "memo": None, "deleted": False},
+        ]}})
+    )
+    respx.get(f"{FX}/2023-12-29..2024-01-05").mock(
+        return_value=Response(200, json={"rates": {"2024-01-05": {"USD": 0.0087987}}})
+    )
+    token = login(app_client)
+    response = app_client.post("/conversions", data={
+        "budget_id": "b1", "budget_name": "My Budget",
+        "account_id": "a1", "account_name": "Japan Trip",
+        "from_currency": "`+alert(1)+`</script>", "to_currency": "USD",
+        "start_date": "2024-01-01", "csrf_token": token,
+    }, follow_redirects=False)
+    conversion_id = response.headers["location"].rsplit("/", 1)[-1]
+    preview = app_client.post(
+        f"/conversions/{conversion_id}/preview", data={"csrf_token": token}
+    )
+    assert preview.status_code == 200
+    # create upper-cases the currency, so the injected tag would be </SCRIPT>;
+    # the page's own legit closing tag is lower-case </script>. The uppercase
+    # raw tag must be absent — browsers close </SCRIPT> case-insensitively, so
+    # tojson's < escaping (not .upper()) is what actually defuses it.
+    assert "</SCRIPT>" not in preview.text
+    assert 'const fromCurrency = "' in preview.text       # rendered as a JS string
+    assert "\\u003c/SCRIPT\\u003e" in preview.text          # < and > escaped
+
+
+@respx.mock
 def test_apply_rejects_unknown_action(app_client):
     # the 400 fires while parsing the form, before any transactions fetch
     mock_budgets()
