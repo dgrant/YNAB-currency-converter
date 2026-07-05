@@ -46,8 +46,8 @@ def index(request: Request):
     )
 
 
-@router.get("/conversions/new")
-def new_form(request: Request):
+def _form_context() -> dict:
+    """Budgets/accounts/currencies needed by the new & edit conversion forms."""
     ynab = get_ynab()
     budgets = []
     for budget in ynab.get_budgets():
@@ -63,10 +63,29 @@ def new_form(request: Request):
             }
         )
     currencies = get_rates_client().currencies()
+    return {"budgets": budgets, "currencies": currencies, "today": date.today().isoformat()}
+
+
+def _used_account_ids(except_conversion_id: str | None = None) -> list[str]:
+    """Account ids that already have a conversion (an account gets at most one)."""
+    return sorted(
+        c["account_id"]
+        for c in get_store().load()
+        if c["id"] != except_conversion_id
+    )
+
+
+def _reject_duplicate_account(account_id: str, except_conversion_id: str | None = None) -> None:
+    if account_id in _used_account_ids(except_conversion_id):
+        raise HTTPException(409, "That account already has a conversion configured")
+
+
+@router.get("/conversions/new")
+def new_form(request: Request):
     return templates.TemplateResponse(
         request,
-        "new.html",
-        {"budgets": budgets, "currencies": currencies, "today": date.today().isoformat()},
+        "conversion_form.html",
+        {**_form_context(), "conversion": None, "used_account_ids": _used_account_ids()},
     )
 
 
@@ -81,6 +100,7 @@ def create(
     start_date: str = Form(...),
 ):
     date.fromisoformat(start_date)
+    _reject_duplicate_account(account_id)
     conversion = get_store().add(
         {
             "budget_id": budget_id,
@@ -106,6 +126,50 @@ def _get_conversion_or_404(conversion_id: str) -> dict:
 def detail(request: Request, conversion_id: str):
     conversion = _get_conversion_or_404(conversion_id)
     return templates.TemplateResponse(request, "detail.html", {"conversion": conversion})
+
+
+@router.get("/conversions/{conversion_id}/edit")
+def edit_form(request: Request, conversion_id: str):
+    conversion = _get_conversion_or_404(conversion_id)
+    return templates.TemplateResponse(
+        request,
+        "conversion_form.html",
+        {
+            **_form_context(),
+            "conversion": conversion,
+            "used_account_ids": _used_account_ids(except_conversion_id=conversion_id),
+        },
+    )
+
+
+@router.post("/conversions/{conversion_id}/edit")
+def edit(
+    conversion_id: str,
+    budget_id: str = Form(...),
+    budget_name: str = Form(...),
+    account_id: str = Form(...),
+    account_name: str = Form(...),
+    from_currency: str = Form(...),
+    to_currency: str = Form(...),
+    start_date: str = Form(...),
+):
+    date.fromisoformat(start_date)
+    _reject_duplicate_account(account_id, except_conversion_id=conversion_id)
+    updated = get_store().update(
+        conversion_id,
+        {
+            "budget_id": budget_id,
+            "budget_name": budget_name,
+            "account_id": account_id,
+            "account_name": account_name,
+            "from_currency": from_currency.upper(),
+            "to_currency": to_currency.upper(),
+            "start_date": start_date,
+        },
+    )
+    if updated is None:
+        raise HTTPException(404, "Conversion not found")
+    return RedirectResponse(f"/conversions/{conversion_id}", status_code=303)
 
 
 @router.post("/conversions/{conversion_id}/delete")

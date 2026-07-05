@@ -1,8 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="card narrow">
-  <h1>New conversion</h1>
-  <form method="post" action="/conversions" id="new-conversion">
+  <h1>{{ "Edit conversion" if conversion else "New conversion" }}</h1>
+  <form method="post"
+        action="{{ '/conversions/' + conversion.id + '/edit' if conversion else '/conversions' }}"
+        id="conversion-form">
     <label for="budget">Budget</label>
     <select id="budget" name="budget_id" required></select>
 
@@ -24,18 +26,27 @@
     </select>
 
     <label for="start_date">Start date (earliest unconverted transaction)</label>
-    <input type="date" id="start_date" name="start_date" value="{{ today }}" required>
+    <input type="date" id="start_date" name="start_date"
+           value="{{ conversion.start_date if conversion else today }}" required>
 
     <input type="hidden" name="budget_name" id="budget_name">
     <input type="hidden" name="account_name" id="account_name">
-    <button type="submit" class="primary">Create conversion</button>
+    <button type="submit" class="primary">
+      {{ "Save changes" if conversion else "Create conversion" }}
+    </button>
+    {% if conversion %}
+    <a href="/conversions/{{ conversion.id }}">Cancel</a>
+    {% endif %}
   </form>
 </div>
 
 <script>
   const budgets = {{ budgets | tojson }};
+  const conversion = {{ conversion | tojson }};
+  const usedAccountIds = new Set({{ used_account_ids | tojson }});
   const budgetSelect = document.getElementById("budget");
   const accountSelect = document.getElementById("account");
+  const fromCurrency = document.getElementById("from_currency");
   const toCurrency = document.getElementById("to_currency");
 
   for (const b of budgets) {
@@ -46,7 +57,17 @@
     const budget = budgets.find(b => b.id === budgetSelect.value);
     accountSelect.innerHTML = "";
     for (const a of (budget ? budget.accounts : [])) {
-      accountSelect.add(new Option(a.name, a.id));
+      const option = new Option(a.name, a.id);
+      if (usedAccountIds.has(a.id)) {
+        option.disabled = true;
+        option.text += " — already has a conversion";
+      }
+      accountSelect.add(option);
+    }
+    // don't leave a disabled option preselected
+    if (accountSelect.selectedOptions[0]?.disabled) {
+      const firstEnabled = [...accountSelect.options].find(o => !o.disabled);
+      accountSelect.value = firstEnabled ? firstEnabled.value : "";
     }
     if (budget && budget.currency) {
       toCurrency.value = budget.currency;
@@ -54,9 +75,18 @@
   }
 
   budgetSelect.addEventListener("change", refreshAccounts);
-  refreshAccounts();
 
-  document.getElementById("new-conversion").addEventListener("submit", () => {
+  if (conversion) {
+    budgetSelect.value = conversion.budget_id;
+  }
+  refreshAccounts();
+  if (conversion) {
+    accountSelect.value = conversion.account_id;
+    fromCurrency.value = conversion.from_currency;
+    toCurrency.value = conversion.to_currency;
+  }
+
+  document.getElementById("conversion-form").addEventListener("submit", () => {
     document.getElementById("budget_name").value =
       budgetSelect.selectedOptions[0]?.text || "";
     document.getElementById("account_name").value =
