@@ -8,6 +8,10 @@
 <p>{{ rows | length }} unconverted transaction{{ "s" if rows | length != 1 }}
    ({{ total_fetched }} fetched since {{ conversion.start_date }}).
    Review and untick anything you don't want converted.</p>
+<p class="hint">If a transaction was actually entered in {{ conversion.to_currency }}, change its
+   action: “Memo ≈…” keeps the amount and notes the {{ conversion.from_currency }} equivalent
+   in the memo; “Skip forever” keeps the amount and adds “(skipped)” to the memo so the
+   transaction never shows up here again.</p>
 {% if skipped_splits %}
 <p class="hint">{{ skipped_splits }} split transaction{{ "s" if skipped_splits != 1 }} skipped —
    split transactions aren't supported yet; convert them manually in YNAB.</p>
@@ -20,6 +24,7 @@
         <th><input type="checkbox" checked onclick="document.querySelectorAll('.row-check').forEach(c => c.checked = this.checked)"></th>
         <th>Date</th>
         <th>Payee</th>
+        <th>Action</th>
         <th class="memo">Memo</th>
         <th class="num">Original ({{ conversion.from_currency }})</th>
         <th class="num">Rate</th>
@@ -33,20 +38,30 @@
           <input type="checkbox" class="row-check" name="selected" value="{{ row.id }}" checked>
           <input type="hidden" name="amount_{{ row.id }}" value="{{ row.new_milliunits }}">
           <input type="hidden" name="memo_{{ row.id }}" value="{{ row.new_memo }}">
+          <input type="hidden" name="already_memo_{{ row.id }}" value="{{ row.already_memo }}">
+          <input type="hidden" name="skip_memo_{{ row.id }}" value="{{ row.skip_memo }}">
         </td>
         <td>{{ row.date }}</td>
         <td>{{ row.payee_name }}</td>
+        <td class="action">
+          <select name="action_{{ row.id }}"
+                  onchange="this.closest('tr').classList.toggle('no-convert', this.value !== 'convert')">
+            <option value="convert">Convert</option>
+            <option value="already">Memo ≈{{ row.equivalent_display }} (already {{ conversion.to_currency }})</option>
+            <option value="skip">Skip forever (already {{ conversion.to_currency }})</option>
+          </select>
+        </td>
         <td class="memo">{{ row.old_memo }}</td>
         <td class="num">{{ row.original_display }}</td>
-        <td class="num">{{ row.rate_display }}</td>
-        <td class="num">{{ row.new_display }}</td>
+        <td class="num fx">{{ row.rate_display }}</td>
+        <td class="num fx">{{ row.new_display }}</td>
       </tr>
       {% endfor %}
     </tbody>
     {% if totals %}
     <tfoot>
       <tr>
-        <td colspan="3">Total ({{ rows | length }} row{{ "s" if rows | length != 1 }})</td>
+        <td colspan="4">Total ({{ rows | length }} row{{ "s" if rows | length != 1 }})</td>
         <td class="memo"></td>
         <td class="num">{{ totals.original }}</td>
         <td></td>

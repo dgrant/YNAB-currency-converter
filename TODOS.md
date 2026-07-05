@@ -21,16 +21,16 @@ not break (memo marker format, milliunit math, preview→approve contract).
       `-1,817 JPY (FX rate: 0.0087987)` back out, restore the original
       milliunits, strip the marker from the memo. Per-transaction and
       whole-batch undo on the applied page.
-- [ ] **Skip transactions + respect rmillan's `(skipped)` memo marker.**
-      rmillan's site appears to append a `(skipped)` string to the memo of
-      transactions the user chose not to convert (unverified — confirm the
-      exact format first; see the rmillan notes at the bottom for how to
-      test). Two parts: (a) treat memos containing that marker as
-      not-to-convert in `build_preview` (like `MARKER_RE`), otherwise
-      transactions skipped on rmillan's site reappear in every preview here
-      forever; (b) add a "Skip" action in our preview that writes the same
-      marker to the memo, so unticking a transaction can be made permanent.
-      Keep the string byte-compatible with rmillan's, same as the FX marker.
+- [x] **Skip transactions + "already in budget currency" actions.** Done:
+      each preview row has an Action select — *Convert* (default),
+      *Already \<CUR\> (memo ≈… )* for amounts entered in the budget currency
+      already (keeps the amount, appends the original-currency equivalent
+      with the FX-rate marker so it never reappears), and *mark skipped*
+      (keeps the amount, appends `(skipped)`). Memos containing `(skipped)`
+      are treated as not-to-convert (`is_skipped`), so transactions skipped
+      on rmillan's site should be respected too. Remaining: the exact rmillan
+      `(skipped)` byte format is still unverified — confirm via a throwaway
+      rmillan account (see notes at the bottom) if compatibility matters.
 - [x] **Edit a conversion.** Done: `/conversions/{id}/edit` (shared
       `conversion_form.html` with the new form), plus Edit/Delete on the
       detail page.

@@ -5,7 +5,14 @@ from fastapi.responses import RedirectResponse
 
 from ..auth import require_login
 from ..config import get_settings
-from ..convert import build_preview, format_amount, format_original, is_converted, is_split
+from ..convert import (
+    build_preview,
+    format_amount,
+    format_original,
+    is_converted,
+    is_skipped,
+    is_split,
+)
 from ..rates import FrankfurterClient
 from ..store import ConversionStore
 from ..templates import templates
@@ -213,7 +220,7 @@ def preview(request: Request, conversion_id: str):
     )
     pending, skipped_splits = [], 0
     for txn in transactions:
-        if txn["amount"] == 0 or is_converted(txn.get("memo")):
+        if txn["amount"] == 0 or is_converted(txn.get("memo")) or is_skipped(txn.get("memo")):
             continue
         if is_split(txn):
             skipped_splits += 1
@@ -256,14 +263,24 @@ async def apply(request: Request, conversion_id: str):
     conversion = _get_conversion_or_404(conversion_id)
     form = await request.form()
     try:
-        updates = [
-            {
-                "id": txn_id,
-                "amount": int(str(form[f"amount_{txn_id}"])),
-                "memo": str(form[f"memo_{txn_id}"])[:500],
-            }
-            for txn_id in form.getlist("selected")
-        ]
+        updates = []
+        for txn_id in form.getlist("selected"):
+            action = str(form.get(f"action_{txn_id}") or "convert")
+            if action == "convert":
+                updates.append(
+                    {
+                        "id": txn_id,
+                        "amount": int(str(form[f"amount_{txn_id}"])),
+                        "memo": str(form[f"memo_{txn_id}"])[:500],
+                    }
+                )
+            elif action in ("already", "skip"):
+                # Amount is already in the budget currency — patch the memo only.
+                updates.append(
+                    {"id": txn_id, "memo": str(form[f"{action}_memo_{txn_id}"])[:500]}
+                )
+            else:
+                raise ValueError(f"unknown action {action!r}")
     except (KeyError, ValueError) as exc:
         raise HTTPException(
             400, "Malformed apply form — go back and run the preview again"

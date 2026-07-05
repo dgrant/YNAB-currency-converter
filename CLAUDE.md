@@ -39,6 +39,13 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
   `convert.py`. This is how converting one transaction now and others later
   works, and how transactions previously converted by rmillan's service are
   skipped. Keep the format compatible.
+- **Per-row preview actions** — besides Convert, a row can be marked
+  "already in the budget currency": *Already \<CUR\> (memo …)* keeps the amount
+  and appends `≈ 331,754 JPY (FX rate: 0.0087987)` (the `≈` marks it as an
+  equivalence note, not a conversion — the `(FX rate: …)` part still matches
+  `MARKER_RE` so it's excluded from future previews), and *mark skipped*
+  keeps the amount and appends `(skipped)` (`SKIPPED_RE`, also excluded).
+  Both actions PATCH the memo only, never the amount.
 - **Preview → approve** — `preview.html` renders proposed changes with the new
   amount/memo in hidden form fields; `apply` writes exactly those. No
   server-side pending state, so approve reflects what was shown even if rates

@@ -9,6 +9,12 @@ from .rates import RateTable
 # marker is considered already converted and is never converted again.
 MARKER_RE = re.compile(r"\(FX rate: [0-9]*\.?[0-9]+\)")
 
+# Memo marker for transactions the user chose to never convert (e.g. a
+# reconciliation entry already recorded in the budget currency). Matches
+# the marker rmillan's service appears to use for its skip feature.
+SKIPPED_MARKER = "(skipped)"
+SKIPPED_RE = re.compile(re.escape(SKIPPED_MARKER))
+
 # ISO 4217 currencies with no minor unit (whole-number amounts).
 ZERO_DECIMAL_CURRENCIES = {
     "JPY", "KRW", "VND", "ISK", "CLP", "PYG", "UGX", "RWF",
@@ -20,6 +26,10 @@ def is_converted(memo: str | None) -> bool:
     return bool(memo and MARKER_RE.search(memo))
 
 
+def is_skipped(memo: str | None) -> bool:
+    return bool(memo and SKIPPED_RE.search(memo))
+
+
 def is_split(txn: dict) -> bool:
     """YNAB split transactions: subtransactions must sum to the parent, so
     patching the parent's amount alone would be rejected or corrupt the split.
@@ -29,8 +39,14 @@ def is_split(txn: dict) -> bool:
 
 def is_convertible(txn: dict) -> bool:
     """The single source of truth for which transactions get proposed:
-    nonzero, not already converted, and not a split."""
-    return txn["amount"] != 0 and not is_converted(txn.get("memo")) and not is_split(txn)
+    nonzero, not already converted, not skipped, and not a split."""
+    memo = txn.get("memo")
+    return (
+        txn["amount"] != 0
+        and not is_converted(memo)
+        and not is_skipped(memo)
+        and not is_split(txn)
+    )
 
 
 def decimal_digits(currency: str) -> int:
@@ -67,13 +83,40 @@ def convert_milliunits(milliunits: int, rate: float, to_currency: str) -> int:
     return int(converted * 1000)
 
 
+def equivalent_milliunits(milliunits: int, rate: float, from_currency: str) -> int:
+    """Inverse of convert_milliunits: what a budget-currency amount is worth in
+    the original currency (for 'already in budget currency' memos)."""
+    digits = decimal_digits(from_currency)
+    quantum = Decimal(1).scaleb(-digits)
+    equivalent = (Decimal(milliunits) / 1000 / Decimal(str(rate))).quantize(
+        quantum, rounding=ROUND_HALF_UP
+    )
+    return int(equivalent * 1000)
+
+
 def build_marker(milliunits: int, from_currency: str, rate: float) -> str:
     return f"{format_original(milliunits, from_currency)} (FX rate: {format_rate(rate)})"
 
 
-def build_memo(old_memo: str | None, milliunits: int, from_currency: str, rate: float) -> str:
-    marker = build_marker(milliunits, from_currency, rate)
+def _append_marker(old_memo: str | None, marker: str) -> str:
     return f"{old_memo} {marker}" if old_memo else marker
+
+
+def build_memo(old_memo: str | None, milliunits: int, from_currency: str, rate: float) -> str:
+    return _append_marker(old_memo, build_marker(milliunits, from_currency, rate))
+
+
+def build_already_memo(
+    old_memo: str | None, equivalent: int, from_currency: str, rate: float
+) -> str:
+    """Memo for a transaction already entered in the budget currency: record its
+    original-currency equivalent. The '≈' distinguishes it from a real conversion,
+    while the '(FX rate: …)' marker still excludes it from future previews."""
+    return _append_marker(old_memo, f"≈ {build_marker(equivalent, from_currency, rate)}")
+
+
+def build_skip_memo(old_memo: str | None) -> str:
+    return _append_marker(old_memo, SKIPPED_MARKER)
 
 
 def build_preview(
@@ -89,6 +132,9 @@ def build_preview(
             continue
         rate = rates.rate_for(date.fromisoformat(txn["date"]))
         new_milliunits = convert_milliunits(txn["amount"], rate, to_currency)
+        # For the "already in budget currency" action: the amount stays as-is,
+        # so its original-currency equivalent goes in the memo instead.
+        equivalent = equivalent_milliunits(txn["amount"], rate, from_currency)
         rows.append(
             {
                 "id": txn["id"],
@@ -102,6 +148,11 @@ def build_preview(
                 "new_milliunits": new_milliunits,
                 "new_display": format_amount(new_milliunits, to_currency),
                 "new_memo": build_memo(txn.get("memo"), txn["amount"], from_currency, rate),
+                "equivalent_display": format_original(equivalent, from_currency),
+                "already_memo": build_already_memo(
+                    txn.get("memo"), equivalent, from_currency, rate
+                ),
+                "skip_memo": build_skip_memo(txn.get("memo")),
             }
         )
     return rows

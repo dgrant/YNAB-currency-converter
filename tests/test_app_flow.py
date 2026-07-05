@@ -212,6 +212,93 @@ def test_full_conversion_flow(app_client):
 
 
 @respx.mock
+def test_already_in_budget_currency_and_skip_actions(app_client):
+    mock_budgets()
+    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": [
+            # actually 2,919 USD entered as "2,919 JPY" — keep amount, memo the JPY value
+            {"id": "t1", "date": "2024-01-05", "amount": 2919000,
+             "payee_name": "Transfer : BMO Chequing", "memo": None, "deleted": False},
+            # reconciliation already in USD — mark skipped, no JPY memo
+            {"id": "t2", "date": "2024-01-05", "amount": -61000,
+             "payee_name": "Reconciliation", "memo": None, "deleted": False},
+            # previously skipped: must never reappear in the preview
+            {"id": "t3", "date": "2024-01-05", "amount": -5000000,
+             "payee_name": "Old reconciliation", "memo": "(skipped)", "deleted": False},
+        ]}})
+    )
+    respx.get(f"{FX}/2023-12-29..2024-01-05").mock(
+        return_value=Response(200, json={"rates": {"2024-01-05": {"USD": 0.0087987}}})
+    )
+    patch_route = respx.patch(f"{YNAB}/budgets/b1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": [{"id": "t1"}, {"id": "t2"}]}})
+    )
+
+    token = login(app_client)
+    response = app_client.post("/conversions", data={
+        "budget_id": "b1", "budget_name": "My Budget",
+        "account_id": "a1", "account_name": "Japan Trip",
+        "from_currency": "JPY", "to_currency": "USD",
+        "start_date": "2024-01-01", "csrf_token": token,
+    }, follow_redirects=False)
+    conversion_id = response.headers["location"].rsplit("/", 1)[-1]
+
+    preview = app_client.post(
+        f"/conversions/{conversion_id}/preview", data={"csrf_token": token}
+    )
+    assert preview.status_code == 200
+    assert 'value="t3"' not in preview.text  # already marked (skipped)
+    assert 'name="action_t1"' in preview.text
+    # 2,919 USD / 0.0087987 = 331,754 JPY offered as the already-USD memo
+    assert 'name="already_memo_t1" value="≈ 331,754 JPY (FX rate: 0.0087987)"' in preview.text
+    assert 'name="skip_memo_t2" value="(skipped)"' in preview.text
+
+    applied = app_client.post(f"/conversions/{conversion_id}/apply", data={
+        "selected": ["t1", "t2"],
+        "action_t1": "already",
+        "amount_t1": "25680", "memo_t1": "unused",
+        "already_memo_t1": "≈ 331,754 JPY (FX rate: 0.0087987)",
+        "skip_memo_t1": "(skipped)",
+        "action_t2": "skip",
+        "amount_t2": "-540", "memo_t2": "unused",
+        "already_memo_t2": "≈ -6,933 JPY (FX rate: 0.0087987)",
+        "skip_memo_t2": "(skipped)",
+        "csrf_token": token,
+    })
+    assert applied.status_code == 200
+    assert "2 transactions updated in YNAB" in applied.text
+
+    # both PATCHes are memo-only: the amounts were already in the budget currency
+    body = json.loads(patch_route.calls[0].request.content)
+    assert body == {"transactions": [
+        {"id": "t1", "memo": "≈ 331,754 JPY (FX rate: 0.0087987)"},
+        {"id": "t2", "memo": "(skipped)"},
+    ]}
+
+
+@respx.mock
+def test_apply_rejects_unknown_action(app_client):
+    mock_budgets()
+    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": []}})
+    )
+    token = login(app_client)
+    response = app_client.post("/conversions", data={
+        "budget_id": "b1", "budget_name": "My Budget",
+        "account_id": "a1", "account_name": "Japan Trip",
+        "from_currency": "JPY", "to_currency": "USD",
+        "start_date": "2024-01-01", "csrf_token": token,
+    }, follow_redirects=False)
+    conversion_id = response.headers["location"].rsplit("/", 1)[-1]
+
+    response = app_client.post(f"/conversions/{conversion_id}/apply", data={
+        "selected": ["t1"], "action_t1": "explode",
+        "amount_t1": "1", "memo_t1": "x", "csrf_token": token,
+    })
+    assert response.status_code == 400
+
+
+@respx.mock
 def test_apply_with_nothing_selected_patches_nothing(app_client):
     mock_budgets()
     patch_route = respx.patch(f"{YNAB}/budgets/b1/transactions")
