@@ -104,6 +104,9 @@ button.link {
 
 button.link.danger { color: var(--danger); }
 
+.card.actions { display: flex; align-items: center; gap: 1.25rem; }
+.card.actions .button, .card.actions button { margin-top: 0; }
+
 table {
   width: 100%;
   border-collapse: collapse;

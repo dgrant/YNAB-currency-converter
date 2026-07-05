@@ -21,8 +21,9 @@ not break (memo marker format, milliunit math, preview→approve contract).
       `-1,817 JPY (FX rate: 0.0087987)` back out, restore the original
       milliunits, strip the marker from the memo. Per-transaction and
       whole-batch undo on the applied page.
-- [ ] **Edit a conversion.** There's create and delete but no edit
-      (`app/routes/conversions.py`). Most useful field: `start_date`.
+- [x] **Edit a conversion.** Done: `/conversions/{id}/edit` (shared
+      `conversion_form.html` with the new form), plus Edit/Delete on the
+      detail page.
 - [ ] **Auto-advance `start_date` after apply.** Every preview refetches all
       transactions since the original start date and re-skips converted ones.
       After a successful apply, bump the stored `start_date` to the oldest

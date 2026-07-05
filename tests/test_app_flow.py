@@ -93,3 +93,66 @@ def test_apply_with_nothing_selected_patches_nothing(app_client):
     applied = app_client.post(f"/conversions/{conversion_id}/apply", data={})
     assert applied.status_code == 200
     assert not patch_route.called
+
+
+@respx.mock
+def test_edit_conversion(app_client):
+    respx.get(f"{YNAB}/budgets").mock(
+        return_value=Response(200, json={"data": {"budgets": [
+            {"id": "b1", "name": "My Budget",
+             "currency_format": {"iso_code": "USD"}},
+        ]}})
+    )
+    respx.get(f"{YNAB}/budgets/b1/accounts").mock(
+        return_value=Response(200, json={"data": {"accounts": [
+            {"id": "a1", "name": "Japan Trip", "deleted": False, "closed": False},
+            {"id": "a2", "name": "Europe Trip", "deleted": False, "closed": False},
+        ]}})
+    )
+    respx.get(f"{FX}/currencies").mock(
+        return_value=Response(200, json={"JPY": "Japanese Yen", "EUR": "Euro", "USD": "US Dollar"})
+    )
+
+    login(app_client)
+
+    # the same template also serves the new-conversion form
+    new_form = app_client.get("/conversions/new")
+    assert new_form.status_code == 200
+    assert "New conversion" in new_form.text
+
+    response = app_client.post("/conversions", data={
+        "budget_id": "b1", "budget_name": "My Budget",
+        "account_id": "a1", "account_name": "Japan Trip",
+        "from_currency": "JPY", "to_currency": "USD",
+        "start_date": "2024-01-01",
+    }, follow_redirects=False)
+    conversion_id = response.headers["location"].rsplit("/", 1)[-1]
+
+    # the edit form renders prefilled with the existing conversion
+    form = app_client.get(f"/conversions/{conversion_id}/edit")
+    assert form.status_code == 200
+    assert "Edit conversion" in form.text
+    assert 'value="2024-01-01"' in form.text  # start_date prefilled
+
+    response = app_client.post(f"/conversions/{conversion_id}/edit", data={
+        "budget_id": "b1", "budget_name": "My Budget",
+        "account_id": "a2", "account_name": "Europe Trip",
+        "from_currency": "EUR", "to_currency": "USD",
+        "start_date": "2024-03-15",
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/conversions/{conversion_id}"
+
+    detail = app_client.get(f"/conversions/{conversion_id}")
+    assert "Europe Trip" in detail.text
+    assert "EUR → USD" in detail.text
+    assert "2024-03-15" in detail.text
+
+    # editing a nonexistent conversion is a 404, and GET too
+    assert app_client.get("/conversions/nope/edit").status_code == 404
+    assert app_client.post("/conversions/nope/edit", data={
+        "budget_id": "b1", "budget_name": "My Budget",
+        "account_id": "a1", "account_name": "Japan Trip",
+        "from_currency": "JPY", "to_currency": "USD",
+        "start_date": "2024-01-01",
+    }).status_code == 404

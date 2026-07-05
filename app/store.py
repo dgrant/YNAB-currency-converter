@@ -30,6 +30,17 @@ class ConversionStore:
         self._save(conversions)
         return conversion
 
+    def update(self, conversion_id: str, fields: dict) -> dict | None:
+        """Merge fields into an existing conversion; None if it doesn't exist."""
+        conversions = self.load()
+        for i, existing in enumerate(conversions):
+            if existing["id"] == conversion_id:
+                updated = {**existing, **fields, "id": conversion_id}
+                conversions[i] = updated
+                self._save(conversions)
+                return updated
+        return None
+
     def delete(self, conversion_id: str) -> None:
         conversions = [c for c in self.load() if c["id"] != conversion_id]
         self._save(conversions)

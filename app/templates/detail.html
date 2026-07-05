@@ -17,4 +17,11 @@
      start date), skips any already carrying an <code>(FX rate: …)</code> memo,
      and shows the proposed conversions. Nothing is written to YNAB until you approve.</p>
 </div>
+<div class="card actions">
+  <a class="button" href="/conversions/{{ conversion.id }}/edit">Edit</a>
+  <form method="post" action="/conversions/{{ conversion.id }}/delete"
+        onsubmit="return confirm('Delete this conversion? (YNAB data is not touched.)')">
+    <button type="submit" class="link danger">Delete</button>
+  </form>
+</div>
 {% endblock %}
