@@ -53,7 +53,9 @@ async def verify_csrf(request: Request) -> None:
     token = request.session.get("csrf")
     form = await request.form()
     submitted = str(form.get("csrf_token", ""))
-    if not token or not secrets.compare_digest(submitted, token):
+    # compare bytes: compare_digest raises TypeError on non-ASCII *strings*,
+    # which would turn a garbage token into a 500 instead of a 403
+    if not token or not secrets.compare_digest(submitted.encode(), token.encode()):
         raise HTTPException(
             403, "Invalid or missing CSRF token — go back, reload the page, and retry"
         )
@@ -93,7 +95,9 @@ def login(request: Request, password: str = Form(...)):
             {"error": f"Too many failed attempts — try again in {_lockout_remaining()}s."},
             status_code=429,
         )
-    if secrets.compare_digest(password, get_settings().app_password):
+    # bytes for the same reason as verify_csrf: a non-ASCII password attempt
+    # (or a non-ASCII APP_PASSWORD) must compare falsely, not raise TypeError
+    if secrets.compare_digest(password.encode(), get_settings().app_password.encode()):
         _reset_throttle()
         request.session["authed"] = True
         return RedirectResponse("/conversions", status_code=303)

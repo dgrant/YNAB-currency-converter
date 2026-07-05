@@ -79,6 +79,19 @@ def test_wrong_password_rejected(app_client):
     assert response.status_code == 401
 
 
+def test_non_ascii_password_rejected_cleanly(app_client):
+    # compare_digest on str raises TypeError for non-ASCII; must be a 401, not 500
+    token = get_csrf(app_client)
+    response = app_client.post("/login", data={"password": "pässwörd", "csrf_token": token})
+    assert response.status_code == 401
+
+
+def test_non_ascii_csrf_token_is_403_not_500(app_client):
+    get_csrf(app_client)  # session now has a real token
+    response = app_client.post("/login", data={"password": "test-password", "csrf_token": "é"})
+    assert response.status_code == 403
+
+
 def test_throttle_delay_never_overflows():
     import app.auth as auth
 

@@ -22,10 +22,11 @@ from the internet until you set up one of the access options below). `data/conve
 state) lives in `./data` on the host — back it up if you care about your
 conversion configs; losing it never touches your YNAB data.
 
-The container runs as an unprivileged user with uid 1000 (not root). On a
-stock Debian/Ubuntu host the first user is uid 1000, so the bind-mounted
-`./data` directory is writable out of the box. If saving a conversion ever
-fails with a permission error, run `chown -R 1000 data` once.
+The app process runs as an unprivileged user (uid 1000), not root. The
+container entrypoint starts as root just long enough to `chown` the
+bind-mounted `./data` directory (Docker creates missing host dirs root-owned,
+and older deployments have root-owned files from when the app ran as root),
+then drops privileges — no manual chown needed on the host.
 
 ## Updating
 
