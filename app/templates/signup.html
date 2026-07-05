@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Sign up — YNAB Currency Converter{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>Sign up</h1>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form method="post" action="/signup">
+    {{ csrf_input(request) }}
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email" value="{{ email }}" autofocus required>
+    <label for="password">Password (at least 8 characters)</label>
+    <input type="password" id="password" name="password" minlength="8" required>
+    <button type="submit" class="primary">Create account</button>
+  </form>
+  <p class="hint">Already have an account? <a href="/login">Log in</a>.</p>
+</div>
+{% endblock %}

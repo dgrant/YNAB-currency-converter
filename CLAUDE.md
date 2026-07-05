@@ -1,7 +1,7 @@
 # CLAUDE.md — notes for future agents
 
 Self-hosted clone of the "Multi-currency for YNAB" conversions page
-(ynab.rmillan.com/conversions). Single-user web app: enter transactions in a
+(ynab.rmillan.com/conversions). Multi-user web app: enter transactions in a
 YNAB account in their original foreign currency, and this app converts each to
 the budget currency using the exchange rate of the transaction's date, editing
 the amount in place in YNAB and annotating the memo.
@@ -9,21 +9,29 @@ the amount in place in YNAB and annotating the memo.
 ## Stack & layout
 
 - **Python + FastAPI + Jinja2**, server-rendered. `httpx` for HTTP.
-- **No database.** The only persisted state is `data/conversions.json` (list of
-  configured conversions). YNAB itself is the source of truth for what's already
-  been converted — see the memo marker below.
+- **SQLite** (`data/app.db`, stdlib sqlite3, no ORM): users, per-user YNAB
+  connections, per-user conversions. No transaction data is stored — YNAB
+  itself is the source of truth for what's already been converted (see the
+  memo marker below).
 - FX rates from **Frankfurter** (free ECB API, no key, historical by date).
 
 ```
 app/
-  main.py            # app factory, SessionMiddleware, route wiring
-  config.py          # env: APP_PASSWORD, SECRET_KEY, YNAB_TOKEN, DATA_DIR
-  auth.py            # single-password login + require_login dep (swap point for Google SSO)
-  store.py           # ConversionStore: load/save data/conversions.json (atomic write)
+  main.py            # app factory, SessionMiddleware, db.init, route wiring
+  config.py          # env: SECRET_KEY, YNAB_CLIENT_ID/SECRET, PUBLIC_BASE_URL, DATA_DIR
+  db.py              # SQLite schema + connection helper (per-op connections, WAL)
+  users.py           # User + UserStore, scrypt password hashing (stdlib)
+  auth.py            # signup/login/logout, per-email throttle, require_login -> User
+  connections.py     # ConnectionStore: per-user YNAB credentials (PAT or OAuth pair)
+  oauth.py           # YNAB OAuth: authorize URL, code exchange, refresh, get_access_token
+  store.py           # ConversionStore: per-user conversion configs (SQLite)
   ynab.py            # YNABClient: budgets, accounts, transactions, bulk PATCH
+                     #   (one pooled httpx client; per-user token as request header)
   rates.py           # FrankfurterClient + RateTable (business-day fallback)
   convert.py         # core: filter unconverted, compute amounts/memos
-  routes/conversions.py  # list / new / detail / preview / apply
+  import_legacy.py   # one-shot v1 migration: python -m app.import_legacy <email>
+  routes/conversions.py  # list / new / detail / preview / apply (all scoped by user)
+  routes/settings.py     # /settings: PAT entry, OAuth start/callback, disconnect
   templates/ static/
 tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.py is the full HTTP flow
 ```
@@ -43,9 +51,18 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
   amount/memo in hidden form fields; `apply` writes exactly those. No
   server-side pending state, so approve reflects what was shown even if rates
   move afterward.
-- **Auth** — one `APP_PASSWORD` behind a session cookie; all of `auth.py` is the
-  intended swap point for Google Sign-In later (keep the `authed` session key).
-  `/login` is brute-force throttled (in-memory, module state in `auth.py`).
+- **Auth & multi-user** — email+password accounts (open signup), scrypt
+  hashes, session stores `user_id`; `require_login` is a dependency returning
+  the `User` and every store call is scoped by `user.id` — never query
+  conversions or connections without it. `auth.py` remains the swap point for
+  Google Sign-In later (an OIDC flow would set the same `user_id` session
+  key). `/login` is brute-force throttled per email (in-memory, module state).
+- **Per-user YNAB credentials** — each user connects on `/settings`: OAuth
+  ("Connect to YNAB", only when `YNAB_CLIENT_ID/SECRET` are set) or a pasted
+  personal access token. `oauth.get_access_token` transparently refreshes
+  expired OAuth tokens; a *rejected* refresh (revoked grant) deletes the
+  connection, transient failures don't. Routes that need YNAB use the
+  `require_ynab` dependency, which 303s to `/settings` when unconnected.
 - **CSRF** — every POST form must include `{{ csrf_input(request) }}`
   (template global in `templates.py`); `verify_csrf` is a dependency on both
   routers and 403s POSTs without the session's token. Remember this when
@@ -63,8 +80,8 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/pytest
 .venv/bin/ruff check . && .venv/bin/mypy   # CI runs these too — keep them green
-# run locally (needs the env vars):
-APP_PASSWORD=x SECRET_KEY=y YNAB_TOKEN=... .venv/bin/uvicorn app.main:app --port 8000
+# run locally (SECRET_KEY is the only required env var):
+SECRET_KEY=y .venv/bin/uvicorn app.main:app --port 8000
 ```
 
 `YNAB_API_BASE` / `FRANKFURTER_API_BASE` env vars let tests point at mock
@@ -83,9 +100,11 @@ Server: David's Linode (Debian 12), app at `~/YNAB-currency-converter`,
 fronted by host nginx (vhost `/etc/nginx/sites-available/ynabfx.davidgrant.ca`
 → `proxy_pass http://127.0.0.1:8000`) with a certbot Let's Encrypt cert
 (auto-renew via timer). `docker compose` works without sudo; sudo needs a
-password. Secrets (`APP_PASSWORD`, `SECRET_KEY`, `YNAB_TOKEN`) live only in
-`.env` on the server, set by David — never ask for or print them. See
-`.env.example` and `DEPLOY.md`.
+password. Secrets (`SECRET_KEY`, optional `YNAB_CLIENT_SECRET`, legacy
+`APP_PASSWORD`/`YNAB_TOKEN`) live only in `.env` on the server, set by
+David — never ask for or print them. See `.env.example` and `DEPLOY.md`;
+migrating the v1 single-user data is `python -m app.import_legacy <email>`
+(documented there).
 
 **Auto-deploy:** merging/pushing to the default branch (`master`) IS the
 deploy process. CI (`.github/workflows/ci.yml`) runs pytest; a cron job in
@@ -107,8 +126,8 @@ keep commands short and output minimal.
 ## Future work
 
 See `TODOS.md` — the maintained backlog (features, known bugs like split
-transactions, ops). Bigger arcs: multi-user, Google Sign-In, auto-sync
-scheduler, crypto, YNAB OAuth (currently a personal access token).
+transactions, ops). Bigger arcs: Google Sign-In, auto-sync scheduler,
+crypto. (Multi-user + YNAB OAuth landed 2026-07.)
 
 ## gstack (REQUIRED — global install)
 

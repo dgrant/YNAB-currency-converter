@@ -9,18 +9,34 @@ class YNABError(Exception):
         self.status_code = status_code
 
 
+# One pooled httpx client shared by every user's YNABClient (tokens differ per
+# user, so authorization is a per-request header, not a client default).
+_pooled_client: httpx.Client | None = None
+
+
+def pooled_client(base_url: str) -> httpx.Client:
+    global _pooled_client
+    if _pooled_client is None:
+        _pooled_client = httpx.Client(base_url=base_url, timeout=30)
+    return _pooled_client
+
+
 class YNABClient:
     """Minimal client for the official YNAB API (https://api.ynab.com/v1)."""
 
-    def __init__(self, token: str, base_url: str = "https://api.ynab.com/v1") -> None:
-        self._client = httpx.Client(
-            base_url=base_url,
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=30,
-        )
+    def __init__(
+        self,
+        token: str,
+        base_url: str = "https://api.ynab.com/v1",
+        client: httpx.Client | None = None,
+    ) -> None:
+        self._headers = {"Authorization": f"Bearer {token}"}
+        self._client = client if client is not None else pooled_client(base_url)
 
     def _get(self, path: str, params: dict | None = None) -> dict:
-        response = get_or_error(self._client, path, params, YNABError, "YNAB")
+        response = get_or_error(
+            self._client, path, params, YNABError, "YNAB", headers=self._headers
+        )
         self._raise_for_status(response)
         return response.json()["data"]
 
@@ -62,6 +78,7 @@ class YNABClient:
             response = self._client.patch(
                 f"/budgets/{budget_id}/transactions",
                 json={"transactions": transactions},
+                headers=self._headers,
             )
         except httpx.TransportError as exc:
             raise YNABError(f"Could not reach YNAB: {exc}") from exc

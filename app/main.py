@@ -8,10 +8,11 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import auth
+from . import auth, db
 from .config import get_settings
 from .rates import RatesError
 from .routes import conversions
+from .routes import settings as settings_routes
 from .templates import templates
 from .ynab import YNABError
 
@@ -39,6 +40,7 @@ def _error_page(
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    db.init(settings.data_dir)
     # CSRF verification is app-level so every router — present and future —
     # is covered without opting in (it no-ops on non-POST requests).
     app = FastAPI(
@@ -130,6 +132,7 @@ def create_app() -> FastAPI:
         name="static",
     )
     app.include_router(auth.router)
+    app.include_router(settings_routes.router)
     app.include_router(conversions.router)
     return app
 

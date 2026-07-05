@@ -8,6 +8,10 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom: Depends()/Form() in parameter defaults.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Form"]
+
 [tool.mypy]
 python_version = "3.12"
 files = ["app"]

@@ -1,57 +1,90 @@
-import json
-import os
-import tempfile
+"""Per-user conversion configs, persisted in SQLite (see db.py)."""
 import uuid
 from pathlib import Path
 
+from . import db
+
+_FIELDS = (
+    "budget_id",
+    "budget_name",
+    "account_id",
+    "account_name",
+    "from_currency",
+    "to_currency",
+    "start_date",
+)
+
+
+def _row_to_dict(row) -> dict:
+    return {key: row[key] for key in ("id", *_FIELDS)}
+
 
 class ConversionStore:
-    """Persists the list of configured conversions as a single JSON file."""
+    """CRUD for one user's conversions; every method is scoped by user_id."""
 
     def __init__(self, data_dir: Path) -> None:
-        self.path = data_dir / "conversions.json"
+        self.data_dir = data_dir
 
-    def load(self) -> list[dict]:
-        if not self.path.exists():
-            return []
-        with open(self.path) as f:
-            return json.load(f)
+    def load(self, user_id: str) -> list[dict]:
+        conn = db.connect(self.data_dir)
+        try:
+            rows = conn.execute(
+                "SELECT * FROM conversions WHERE user_id = ? ORDER BY rowid", (user_id,)
+            ).fetchall()
+        finally:
+            conn.close()
+        return [_row_to_dict(row) for row in rows]
 
-    def get(self, conversion_id: str) -> dict | None:
-        for conversion in self.load():
-            if conversion["id"] == conversion_id:
-                return conversion
-        return None
+    def get(self, user_id: str, conversion_id: str) -> dict | None:
+        conn = db.connect(self.data_dir)
+        try:
+            row = conn.execute(
+                "SELECT * FROM conversions WHERE user_id = ? AND id = ?",
+                (user_id, conversion_id),
+            ).fetchone()
+        finally:
+            conn.close()
+        return _row_to_dict(row) if row else None
 
-    def add(self, conversion: dict) -> dict:
+    def add(self, user_id: str, conversion: dict) -> dict:
         conversion = {"id": uuid.uuid4().hex[:8], **conversion}
-        conversions = self.load()
-        conversions.append(conversion)
-        self._save(conversions)
+        conn = db.connect(self.data_dir)
+        try:
+            conn.execute(
+                f"INSERT INTO conversions (id, user_id, {', '.join(_FIELDS)}) "
+                f"VALUES (?, ?, {', '.join('?' * len(_FIELDS))})",
+                (conversion["id"], user_id, *(conversion[f] for f in _FIELDS)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
         return conversion
 
-    def update(self, conversion_id: str, fields: dict) -> dict | None:
+    def update(self, user_id: str, conversion_id: str, fields: dict) -> dict | None:
         """Merge fields into an existing conversion; None if it doesn't exist."""
-        conversions = self.load()
-        for i, existing in enumerate(conversions):
-            if existing["id"] == conversion_id:
-                updated = {**existing, **fields, "id": conversion_id}
-                conversions[i] = updated
-                self._save(conversions)
-                return updated
-        return None
-
-    def delete(self, conversion_id: str) -> None:
-        conversions = [c for c in self.load() if c["id"] != conversion_id]
-        self._save(conversions)
-
-    def _save(self, conversions: list[dict]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_path = tempfile.mkstemp(dir=self.path.parent, suffix=".tmp")
+        existing = self.get(user_id, conversion_id)
+        if existing is None:
+            return None
+        updated = {**existing, **fields, "id": conversion_id}
+        conn = db.connect(self.data_dir)
         try:
-            with os.fdopen(fd, "w") as f:
-                json.dump(conversions, f, indent=2)
-            os.replace(tmp_path, self.path)
-        except BaseException:
-            os.unlink(tmp_path)
-            raise
+            conn.execute(
+                f"UPDATE conversions SET {', '.join(f'{f} = ?' for f in _FIELDS)} "
+                "WHERE user_id = ? AND id = ?",
+                (*(updated[f] for f in _FIELDS), user_id, conversion_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return updated
+
+    def delete(self, user_id: str, conversion_id: str) -> None:
+        conn = db.connect(self.data_dir)
+        try:
+            conn.execute(
+                "DELETE FROM conversions WHERE user_id = ? AND id = ?",
+                (user_id, conversion_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()

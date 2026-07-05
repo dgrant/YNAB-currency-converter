@@ -2,31 +2,52 @@ import pytest
 
 
 @pytest.fixture
-def app_client(tmp_path, monkeypatch):
-    """A TestClient for the app with isolated data dir and test config."""
-    monkeypatch.setenv("APP_PASSWORD", "test-password")
-    monkeypatch.setenv("SECRET_KEY", "test-secret")
-    monkeypatch.setenv("YNAB_TOKEN", "test-token")
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+def app_client_factory(tmp_path, monkeypatch):
+    """Build TestClients with isolated data dir and test config.
 
-    import app.config as config
-    import app.routes.conversions as conversions_routes
-
-    monkeypatch.setattr(config, "_settings", None)
-    monkeypatch.setattr(conversions_routes, "_rates_client", None)
-    monkeypatch.setattr(conversions_routes, "_ynab_client", None)
-
-    import app.http as app_http
-
-    monkeypatch.setattr(app_http, "RETRY_DELAY_SECONDS", 0)
-
-    import app.auth as auth
-
-    auth._reset_throttle()  # login-throttle state is module-level
-
+    Accepts extra env vars, e.g. app_client_factory(YNAB_CLIENT_ID="x", ...)
+    for OAuth-enabled apps.
+    """
     from fastapi.testclient import TestClient
 
-    from app.main import create_app
+    def factory(**extra_env):
+        monkeypatch.setenv("SECRET_KEY", "test-secret")
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        for name in (
+            "APP_PASSWORD",
+            "YNAB_TOKEN",
+            "YNAB_CLIENT_ID",
+            "YNAB_CLIENT_SECRET",
+            "PUBLIC_BASE_URL",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        for key, value in extra_env.items():
+            monkeypatch.setenv(key, value)
 
-    with TestClient(create_app()) as client:
+        import app.config as config
+        import app.routes.conversions as conversions_routes
+        import app.ynab as ynab_mod
+
+        monkeypatch.setattr(config, "_settings", None)
+        monkeypatch.setattr(conversions_routes, "_rates_client", None)
+        monkeypatch.setattr(ynab_mod, "_pooled_client", None)
+
+        import app.http as app_http
+
+        monkeypatch.setattr(app_http, "RETRY_DELAY_SECONDS", 0)
+
+        import app.auth as auth
+
+        auth._reset_throttle()  # login-throttle state is module-level
+
+        from app.main import create_app
+
+        return TestClient(create_app())
+
+    return factory
+
+
+@pytest.fixture
+def app_client(app_client_factory):
+    with app_client_factory() as client:
         yield client

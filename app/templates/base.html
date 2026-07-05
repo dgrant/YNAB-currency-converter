@@ -10,11 +10,14 @@
   <header>
     <nav>
       <a class="brand" href="/conversions">YNAB Currency Converter</a>
-      {% if request.session.get("authed") %}
-      <form method="post" action="/logout">
-        {{ csrf_input(request) }}
-        <button type="submit" class="link">Log out</button>
-      </form>
+      {% if request.session.get("user_id") %}
+      <span class="nav-links">
+        <a href="/settings">Settings</a>
+        <form method="post" action="/logout">
+          {{ csrf_input(request) }}
+          <button type="submit" class="link">Log out</button>
+        </form>
+      </span>
       {% endif %}
     </nav>
   </header>
