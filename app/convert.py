@@ -106,8 +106,10 @@ def build_marker(milliunits: int, from_currency: str, rate: float) -> str:
 
 def _truncate_bytes(text: str, max_bytes: int) -> str:
     """Longest prefix of text whose UTF-8 encoding is <= max_bytes, never
-    splitting a multi-byte character."""
-    encoded = text.encode()
+    splitting a multi-byte character. errors="replace" so a malformed string
+    (e.g. a lone surrogate from broken upstream JSON) degrades to U+FFFD
+    instead of crashing the whole preview with UnicodeEncodeError."""
+    encoded = text.encode("utf-8", errors="replace")
     if len(encoded) <= max_bytes:
         return text
     return encoded[:max_bytes].decode(errors="ignore")
@@ -125,8 +127,10 @@ def _append_marker(old_memo: str | None, marker: str) -> str:
     room = MEMO_MAX - marker_bytes - 1  # 1 byte for the separating space
     if room <= 0:  # marker alone fills the field (unreachable with real markers)
         return _truncate_bytes(marker, MEMO_MAX)
-    if len(old_memo.encode()) > room:
+    if len(old_memo.encode("utf-8", errors="replace")) > room:
         old_memo = _truncate_bytes(old_memo, room).rstrip()
+        if not old_memo:  # whitespace-only memo: no leading space
+            return marker
     return f"{old_memo} {marker}"
 
 

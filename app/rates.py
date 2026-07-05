@@ -1,3 +1,4 @@
+import math
 from datetime import date, timedelta
 
 import httpx
@@ -68,9 +69,10 @@ class RateTable:
         for _ in range(LOOKBACK_DAYS + 1):
             rate = self._rates.get(day.isoformat())
             if rate is not None:
-                # A zero/negative rate from the API would zero out conversions and
-                # crash the inverse-equivalent division — refuse it upfront.
-                if rate <= 0:
+                # A zero/negative/NaN/Infinity rate from the API would corrupt
+                # conversions or crash the math — refuse it upfront. (json.loads
+                # happily parses bare NaN/Infinity, and NaN <= 0 is False.)
+                if rate <= 0 or not math.isfinite(rate):
                     raise RatesError(f"Invalid exchange rate {rate} for {day.isoformat()}")
                 return rate
             day -= timedelta(days=1)

@@ -17,8 +17,9 @@
    split transactions aren't supported yet; convert them manually in YNAB.</p>
 {% endif %}
 {% if skipped_marked %}
-<p class="hint">{{ skipped_marked }} transaction{{ "s" if skipped_marked != 1 }} marked
-   “(skipped)” {{ "are" if skipped_marked != 1 else "is" }} excluded.</p>
+<p class="hint">{{ skipped_marked | length }} transaction{{ "s" if skipped_marked | length != 1 }} marked
+   “(skipped)” {{ "are" if skipped_marked | length != 1 else "is" }} excluded:
+   {% for t in skipped_marked %}{{ t.payee_name or "(no payee)" }} ({{ t.date }}){{ "; " if not loop.last }}{% endfor %}.</p>
 {% endif %}
 <form method="post" action="/conversions/{{ conversion.id }}/apply">
   {{ csrf_input(request) }}
@@ -41,6 +42,7 @@
         <td>
           <input type="checkbox" class="row-check" name="selected" value="{{ row.id }}" checked>
           <input type="hidden" name="amount_{{ row.id }}" value="{{ row.new_milliunits }}">
+          <input type="hidden" name="original_{{ row.id }}" value="{{ row.original_milliunits }}">
           <input type="hidden" name="memo_{{ row.id }}" value="{{ row.new_memo }}">
           <input type="hidden" name="already_memo_{{ row.id }}" value="{{ row.already_memo }}">
           <input type="hidden" name="skip_memo_{{ row.id }}" value="{{ row.skip_memo }}">

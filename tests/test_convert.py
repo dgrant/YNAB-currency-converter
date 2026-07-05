@@ -48,6 +48,27 @@ class TestMarkerDetection:
         assert not is_skipped("")
         assert not is_skipped(None)
 
+    def test_whitespace_only_memo_truncates_to_bare_marker(self):
+        # A whitespace memo that rstrips to nothing must not leave " (skipped)"
+        assert build_skip_memo(" " * 495) == "(skipped)"
+
+    def test_malformed_unicode_memo_does_not_crash(self):
+        # A lone surrogate (broken upstream JSON) must degrade, not 500 the preview
+        memo = build_skip_memo("caf\ud83d latte " + "x" * 490)
+        assert is_skipped(memo)
+        assert len(memo.encode("utf-8", errors="replace")) <= 500
+
+    def test_oversized_marker_alone_is_capped(self):
+        # Defensive branch: a marker at/over the cap fills the field alone.
+        # Unreachable with real markers (~30-45 chars) but pinned so the
+        # negative-slice path can never regress silently.
+        huge_marker_memo = build_skip_memo(None)  # sanity: normal path first
+        assert huge_marker_memo == "(skipped)"
+        from app.convert import _append_marker
+        capped = _append_marker("some old memo", "y" * 600)
+        assert capped == "y" * 500
+        assert len(capped.encode()) == 500
+
     def test_marker_survives_memo_length_limit(self):
         # A near-limit memo must be truncated so the appended marker — which
         # future previews rely on — survives YNAB's 500 cap intact, whether

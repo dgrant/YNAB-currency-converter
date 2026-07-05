@@ -58,3 +58,11 @@ def test_zero_or_negative_rate_is_rejected():
         RateTable({"2024-01-05": 0.0}).rate_for(date(2024, 1, 5))
     with pytest.raises(RatesError, match="Invalid exchange rate"):
         RateTable({"2024-01-05": -0.5}).rate_for(date(2024, 1, 5))
+
+
+def test_nan_and_infinity_rates_are_rejected():
+    # json.loads parses bare NaN/Infinity, and NaN <= 0 is False — the guard
+    # must catch non-finite rates explicitly.
+    for bad in (float("nan"), float("inf")):
+        with pytest.raises(RatesError, match="Invalid exchange rate"):
+            RateTable({"2024-01-05": bad}).rate_for(date(2024, 1, 5))

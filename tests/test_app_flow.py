@@ -196,6 +196,7 @@ def test_full_conversion_flow(app_client):
     applied = app_client.post(f"/conversions/{conversion_id}/apply", data={
         "selected": ["t1"],
         "action_t1": "convert",
+        "original_t1": "-1817000",
         "amount_t1": "-15990",
         "memo_t1": "-1,817 JPY (FX rate: 0.0087987)",
         "csrf_token": token,
@@ -249,6 +250,10 @@ def test_already_in_budget_currency_and_skip_actions(app_client):
     )
     assert preview.status_code == 200
     assert 'value="t3"' not in preview.text  # already marked (skipped)
+    # ...and the exclusion is surfaced with the affected payee, not silent
+    assert "1 transaction marked" in preview.text
+    assert "is excluded" in preview.text
+    assert "Old reconciliation (2024-01-05)" in preview.text
     assert 'name="action_t1"' in preview.text
     # 2,919 USD / 0.0087987 = 331,754 JPY offered as the already-USD memo
     assert 'name="already_memo_t1" value="≈ 331,754 JPY (FX rate: 0.0087987)"' in preview.text
@@ -256,11 +261,11 @@ def test_already_in_budget_currency_and_skip_actions(app_client):
 
     applied = app_client.post(f"/conversions/{conversion_id}/apply", data={
         "selected": ["t1", "t2"],
-        "action_t1": "already",
+        "action_t1": "already", "original_t1": "2919000",
         "amount_t1": "25680", "memo_t1": "unused",
         "already_memo_t1": "≈ 331,754 JPY (FX rate: 0.0087987)",
         "skip_memo_t1": "(skipped)",
-        "action_t2": "skip",
+        "action_t2": "skip", "original_t2": "-61000",
         "amount_t2": "-540", "memo_t2": "unused",
         "already_memo_t2": "≈ -6,933 JPY (FX rate: 0.0087987)",
         "skip_memo_t2": "(skipped)",

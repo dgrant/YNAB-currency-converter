@@ -1,3 +1,4 @@
+import asyncio
 from datetime import date
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -140,6 +141,26 @@ def create(
     return RedirectResponse(f"/conversions/{conversion['id']}", status_code=303)
 
 
+# One asyncio.Lock per conversion, guarding apply's fetch→filter→PATCH section.
+# Lazily created on the single event loop, so a plain dict is safe.
+_apply_locks: dict[str, asyncio.Lock] = {}
+
+
+def _apply_lock(conversion_id: str) -> asyncio.Lock:
+    lock = _apply_locks.get(conversion_id)
+    if lock is None:
+        lock = _apply_locks[conversion_id] = asyncio.Lock()
+    return lock
+
+
+def _memo_from_form(value: object) -> str:
+    """Memo from a preview form field. Browsers normalize newlines in form
+    values to CRLF on submit, which can push a server-built <=500-byte memo
+    past the cap — undo that before the [:500] backstop so the trailing FX/skip
+    marker (which future previews rely on) can't get sliced off."""
+    return str(value).replace("\r\n", "\n")[:500]
+
+
 def _get_conversion_or_404(conversion_id: str) -> dict:
     conversion = get_store().get(conversion_id)
     if conversion is None:
@@ -220,7 +241,11 @@ def preview(request: Request, conversion_id: str):
         conversion["budget_id"], conversion["account_id"], conversion["start_date"]
     )
     pending, skipped_splits = [], 0
-    skipped_marked = sum(1 for t in transactions if is_skipped(t.get("memo")))
+    skipped_marked = [
+        {"payee_name": t.get("payee_name") or "", "date": t["date"]}
+        for t in transactions
+        if is_skipped(t.get("memo"))
+    ]
     for txn in transactions:
         if is_excluded(txn):
             continue
@@ -269,61 +294,81 @@ async def apply(request: Request, conversion_id: str):
     form = await request.form()
     try:
         updates = []
-        for txn_id in form.getlist("selected"):
+        # Per-txn metadata kept out of the PATCH body: the action and the
+        # amount the preview was computed against, for write-time re-checks.
+        meta: dict[str, dict] = {}
+        for raw_txn_id in form.getlist("selected"):
+            txn_id = str(raw_txn_id)
             # Required: a missing action must not silently default to convert
             # (the one action that rewrites the amount) — KeyError -> 400.
             action = str(form[f"action_{txn_id}"])
+            original = int(str(form[f"original_{txn_id}"]))
             if action == "convert":
                 updates.append(
                     {
                         "id": txn_id,
                         "amount": int(str(form[f"amount_{txn_id}"])),
-                        "memo": str(form[f"memo_{txn_id}"])[:500],
+                        "memo": _memo_from_form(form[f"memo_{txn_id}"]),
                     }
                 )
             elif action == "already":
                 # Amount is already in the budget currency — patch the memo only.
                 updates.append(
-                    {"id": txn_id, "memo": str(form[f"already_memo_{txn_id}"])[:500]}
+                    {"id": txn_id, "memo": _memo_from_form(form[f"already_memo_{txn_id}"])}
                 )
             elif action == "skip":
                 updates.append(
-                    {"id": txn_id, "memo": str(form[f"skip_memo_{txn_id}"])[:500]}
+                    {"id": txn_id, "memo": _memo_from_form(form[f"skip_memo_{txn_id}"])}
                 )
             else:
                 raise ValueError(f"unknown action {action!r}")
+            meta[txn_id] = {"action": action, "original": original}
     except (KeyError, ValueError) as exc:
         raise HTTPException(
             400, "Malformed apply form — go back and run the preview again"
         ) from exc
     updated, skipped_splits = [], 0
     if updates:
-        # Re-check split status at write time: a transaction may have become a
-        # split between preview render and approval, and patching a split
-        # parent's amount would corrupt or be rejected by YNAB.
         ynab = get_ynab()
-        current = ynab.get_transactions(
-            conversion["budget_id"], conversion["account_id"], conversion["start_date"]
-        )
-        # Only patch transactions that still exist and are not splits. A txn
-        # deleted in YNAB between preview and approval would otherwise make the
-        # whole bulk PATCH fail, applying nothing. Also drop anything that got
-        # converted or skipped since the preview (stale form, second tab,
-        # back-button resubmit) — its marker means that decision already
-        # happened, and overwriting would clobber it.
-        present_ids = {t["id"] for t in current}
-        split_ids = {t["id"] for t in current if is_split(t)}
-        stale_ids = {t["id"] for t in current if is_excluded(t)}
-        safe = [
-            u
-            for u in updates
-            if u["id"] in present_ids
-            and u["id"] not in split_ids
-            and u["id"] not in stale_ids
-        ]
-        skipped_splits = sum(1 for u in updates if u["id"] in split_ids)
-        if safe:
-            updated = ynab.update_transactions(conversion["budget_id"], safe)
+        # Serialize the fetch→filter→PATCH per conversion so two concurrent
+        # approves (double-click, two tabs) can't both pass the re-checks
+        # below against the same pre-PATCH state and race.
+        async with _apply_lock(conversion_id):
+            current = ynab.get_transactions(
+                conversion["budget_id"], conversion["account_id"], conversion["start_date"]
+            )
+            current_by_id = {t["id"]: t for t in current}
+            present_ids = set(current_by_id)
+            split_ids = {tid for tid, t in current_by_id.items() if is_split(t)}
+            # Drop anything that got converted or skipped since the preview
+            # (stale form, second tab, back-button resubmit) — its marker means
+            # that decision already happened, and overwriting would clobber it.
+            stale_ids = {tid for tid, t in current_by_id.items() if is_excluded(t)}
+            # Drop rows whose amount was edited in YNAB since the preview: the
+            # convert amount / "already" equivalence was computed against the
+            # old amount, so writing it now would record a wrong value and the
+            # marker would hide the mismatch from every future preview. (skip
+            # is amount-independent — a bare "(skipped)" note stays valid.)
+            edited_ids = {
+                tid
+                for tid, m in meta.items()
+                if tid in current_by_id
+                and m["action"] in ("convert", "already")
+                and current_by_id[tid]["amount"] != m["original"]
+            }
+            # A txn deleted in YNAB between preview and approval would otherwise
+            # make the whole bulk PATCH fail, applying nothing.
+            safe = [
+                u
+                for u in updates
+                if u["id"] in present_ids
+                and u["id"] not in split_ids
+                and u["id"] not in stale_ids
+                and u["id"] not in edited_ids
+            ]
+            skipped_splits = sum(1 for u in updates if u["id"] in split_ids)
+            if safe:
+                updated = ynab.update_transactions(conversion["budget_id"], safe)
     suffix = f"&skipped_splits={skipped_splits}" if skipped_splits else ""
     return RedirectResponse(
         f"/conversions/{conversion_id}?applied={len(updated)}{suffix}", status_code=303
