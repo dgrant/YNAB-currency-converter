@@ -34,6 +34,15 @@ not break (memo marker format, milliunit math, preview→approve contract).
 - [x] **Edit a conversion.** Done: `/conversions/{id}/edit` (shared
       `conversion_form.html` with the new form), plus Edit/Delete on the
       detail page.
+- [ ] **Convert all accounts at once.** Today preview/apply is per
+      conversion; add a "Preview all" on the index page that runs the
+      preview for every configured conversion and shows one combined,
+      grouped table with a single approve. Implementation notes: rate
+      fetches stay per conversion (different currency pairs), but YNAB
+      updates can share one bulk PATCH per budget
+      (`update_transactions` already takes a list); keep per-row unticking,
+      and keep the preview→approve hidden-field contract. This is also
+      most of the groundwork for the scheduler item above.
 - [ ] **Auto-advance `start_date` after apply.** Every preview refetches all
       transactions since the original start date and re-skips converted ones.
       After a successful apply, bump the stored `start_date` to the oldest
@@ -61,6 +70,16 @@ not break (memo marker format, milliunit math, preview→approve contract).
       access+refresh tokens, store per user, refresh on expiry;
       `YNABClient` already takes a bearer token so only token acquisition
       changes.
+- [ ] **Disconnect / unauthenticate from YNAB.** A settings action that
+      severs the YNAB connection. Today (PAT in `.env`) that's just docs —
+      revoke the token in YNAB's Developer Settings and clear `YNAB_TOKEN`.
+      Once YNAB OAuth lands (item above) it becomes a real feature: a
+      "Disconnect from YNAB" button that deletes the stored access/refresh
+      tokens and revokes the grant, with the UI returning to the
+      "Connect to YNAB" state (rmillan advertises exactly this:
+      "you can revoke this authorization at any moment"). Handle the
+      revoked-token case gracefully everywhere either way — it's the same
+      code path as a user revoking access from the YNAB side.
 - [ ] **Multi-user.** Per-user YNAB credentials and conversion lists. Order
       of work: YNAB OAuth first (per-user tokens), then real sign-in
       (Google via `auth.py`, or email+password like rmillan's Devise
