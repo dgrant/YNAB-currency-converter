@@ -4,18 +4,38 @@ Available only when the deployment registers an OAuth application with YNAB
 (YNAB_CLIENT_ID / YNAB_CLIENT_SECRET); users can always connect with a
 personal access token instead.
 """
+import threading
 import time
 import urllib.parse
 
 import httpx
 
 from .config import Settings
-from .connections import ConnectionStore
+from .connections import ConnectionStore, YNABConnection
 from .ynab import YNABError
 
 # Refresh this long before the token actually expires, so a token that is
 # valid now can't expire mid-request.
 REFRESH_MARGIN_SECONDS = 60
+
+# Serializes refreshes per user (routes are sync, so requests interleave
+# across FastAPI's threadpool). Keyed by user_id and never evicted — bounded
+# by the real user count, not by attacker-controlled input like the login
+# throttle is.
+_refresh_locks: dict[str, threading.Lock] = {}
+_refresh_locks_guard = threading.Lock()
+
+
+def _refresh_lock(user_id: str) -> threading.Lock:
+    with _refresh_locks_guard:
+        return _refresh_locks.setdefault(user_id, threading.Lock())
+
+
+def _is_fresh(connection: YNABConnection) -> bool:
+    return (
+        connection.expires_at is not None
+        and time.time() < connection.expires_at - REFRESH_MARGIN_SECONDS
+    )
 
 
 def is_configured(settings: Settings) -> bool:
@@ -106,24 +126,39 @@ def get_access_token(settings: Settings, store: ConnectionStore, user_id: str) -
     endpoint *rejects* means the user revoked access — the dead connection is
     deleted so the UI returns to the "connect" state. Transient failures
     bubble up as YNABError (friendly 502) without touching the stored tokens.
+
+    Refreshing is serialized per user: YNAB rotates the refresh token on use,
+    so two concurrent requests racing to refresh the same stale token would
+    otherwise have the loser's refresh rejected and delete the connection the
+    winner just replaced it with.
     """
     connection = store.get(user_id)
     if connection is None:
         return None
-    if connection.kind == "pat":
+    if connection.kind == "pat" or _is_fresh(connection):
         return connection.access_token
-    if (
-        connection.expires_at is not None
-        and time.time() < connection.expires_at - REFRESH_MARGIN_SECONDS
-    ):
-        return connection.access_token
-    if not connection.refresh_token:
-        store.delete(user_id)
-        return None
-    try:
-        tokens = refresh_tokens(settings, connection.refresh_token)
-    except OAuthGrantError:
-        store.delete(user_id)
-        return None
-    save_token_response(store, user_id, tokens)
-    return str(tokens["access_token"])
+
+    with _refresh_lock(user_id):
+        # Re-read: another thread may have refreshed while we waited for the lock.
+        connection = store.get(user_id)
+        if connection is None:
+            return None
+        if connection.kind == "pat" or _is_fresh(connection):
+            return connection.access_token
+        if not connection.refresh_token:
+            store.delete(user_id)
+            return None
+        stale_refresh_token = connection.refresh_token
+        try:
+            tokens = refresh_tokens(settings, stale_refresh_token)
+        except OAuthGrantError:
+            # A rejected refresh only means the grant is dead if OUR token was
+            # still the current one. If it no longer matches, someone else
+            # already refreshed (rotating it) and this connection is fine.
+            current = store.get(user_id)
+            if current is not None and current.refresh_token != stale_refresh_token:
+                return current.access_token
+            store.delete(user_id)
+            return None
+        save_token_response(store, user_id, tokens)
+        return str(tokens["access_token"])

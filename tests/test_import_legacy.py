@@ -61,6 +61,30 @@ def test_import_legacy_creates_user_token_and_conversions(legacy_env):
         import_legacy("david@example.com")
 
 
+def test_import_legacy_rolls_back_atomically_on_bad_conversion(legacy_env):
+    # A malformed conversion (missing a required field) must fail the WHOLE
+    # import — no orphaned user/connection left behind — so a re-run isn't
+    # stuck on "user already exists" with zero conversions imported.
+    (legacy_env / "conversions.json").write_text(
+        json.dumps([{**LEGACY_CONVERSION}, {"id": "bad", "budget_id": "b2"}])
+    )
+    from app.import_legacy import import_legacy
+
+    with pytest.raises(KeyError):
+        import_legacy("david@example.com")
+
+    assert UserStore(legacy_env).get_by_email("david@example.com") is None
+    # the JSON file was not renamed — a fixed retry can just run again
+    assert (legacy_env / "conversions.json").exists()
+    assert not (legacy_env / "conversions.json.imported").exists()
+
+    # fix the file and re-run: nothing is stuck, the import succeeds cleanly
+    (legacy_env / "conversions.json").write_text(json.dumps([LEGACY_CONVERSION]))
+    message = import_legacy("david@example.com")
+    assert "imported 1 conversion" in message
+    assert UserStore(legacy_env).get_by_email("david@example.com") is not None
+
+
 def test_import_legacy_requires_app_password(legacy_env, monkeypatch):
     monkeypatch.setenv("APP_PASSWORD", "")
 

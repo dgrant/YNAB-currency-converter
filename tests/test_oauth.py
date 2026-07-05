@@ -1,5 +1,6 @@
 """YNAB OAuth: the connect flow routes and access-token refresh logic."""
 import re
+import threading
 import time
 from types import SimpleNamespace
 
@@ -7,7 +8,7 @@ import pytest
 import respx
 from httpx import Response
 
-from app import db
+from app import db, oauth
 from app.connections import ConnectionStore
 from app.oauth import get_access_token
 from app.users import UserStore
@@ -171,6 +172,59 @@ def test_transient_refresh_failure_keeps_connection(tmp_path):
     with pytest.raises(YNABError):
         get_access_token(SETTINGS, store, user.id)
     assert store.get(user.id) is not None  # not deleted — YNAB was just down
+
+
+@respx.mock
+def test_concurrent_refresh_is_serialized_and_calls_ynab_once(tmp_path):
+    # Several requests racing to refresh the same near-expiry token must not
+    # all hit YNAB with the same (about to be rotated) refresh_token — the
+    # per-user lock means only the first one through actually calls out.
+    call_count = {"n": 0}
+
+    def slow_response(request):
+        call_count["n"] += 1
+        time.sleep(0.05)  # hold the lock briefly so other threads pile up
+        return Response(200, json={
+            "access_token": "new-access", "refresh_token": "new-refresh", "expires_in": 7200,
+        })
+
+    respx.post(f"{OAUTH}/oauth/token").mock(side_effect=slow_response)
+    user, store = make_user_and_store(tmp_path)
+    store.set_oauth(user.id, "stale", "shared-refresh", time.time() - 10)
+
+    results: list[str | None] = []
+
+    def worker() -> None:
+        results.append(get_access_token(SETTINGS, store, user.id))
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert call_count["n"] == 1
+    assert results == ["new-access"] * 8
+
+
+def test_refresh_rejected_but_already_rotated_recovers_instead_of_deleting(tmp_path, monkeypatch):
+    # Simulates a race the in-process lock can't prevent (e.g. a second app
+    # worker process): between our re-read and our refresh call failing,
+    # something else already rotated the refresh token. The rejected 4xx for
+    # OUR stale token must not delete a connection that's actually still good.
+    user, store = make_user_and_store(tmp_path)
+    store.set_oauth(user.id, "stale", "old-refresh", time.time() - 10)
+
+    def fake_refresh_tokens(settings, refresh_token):
+        store.set_oauth(user.id, "winner-access", "winner-refresh", time.time() + 3600)
+        raise oauth.OAuthGrantError("stale refresh token rejected")
+
+    monkeypatch.setattr(oauth, "refresh_tokens", fake_refresh_tokens)
+
+    assert get_access_token(SETTINGS, store, user.id) == "winner-access"
+    connection = store.get(user.id)
+    assert connection is not None
+    assert connection.refresh_token == "winner-refresh"
 
 
 @respx.mock
