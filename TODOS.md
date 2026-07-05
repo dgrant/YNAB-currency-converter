@@ -66,31 +66,34 @@ not break (memo marker format, milliunit math, preview→approve contract).
       `YNAB_CLIENT_SECRET` (+ `PUBLIC_BASE_URL` behind the proxy) — not yet
       done for the live deployment, which needs David to register the app.
       Until then users paste personal access tokens.
-- [ ] **Get the YNAB OAuth app out of Restricted Mode.** A freshly
-      registered OAuth app is capped at a small number of access tokens
-      (~25), so beyond a handful of connected users, new "Connect to YNAB"
-      authorizations fail. Removing the cap means submitting YNAB's OAuth
-      App Review form (Asana) — and the review has real prerequisites the
-      app/site must meet first:
-      1. **Footer disclaimer (site change).** Every page footer must carry:
-         "We are not affiliated, associated, or in any way officially
-         connected with YNAB… The names YNAB and You Need A Budget… are
-         registered trademarks of YNAB." Add to `templates/base.html`.
-      2. **Real Privacy Policy page (site change).** The policy must
-         explain how data obtained through the YNAB API is handled, stored,
-         and secured. Today it's only the landing-page blurb — add a real
-         `/privacy` route/page and link it from the footer, then use that
-         URL in the Developer Settings + review form.
-      3. **"Plan" not "budget" branding.** YNAB brand language prefers
-         "plan" over "budget" where applicable — the UI and copy use
-         "budget" throughout. Decide how far to go (at least don't imply
-         YNAB endorsement).
-      4. Confirm the app name is unique (not already on the Works With YNAB
-         list) and that no YNAB logos are used except the authorized
-         "Works with YNAB" logo (we currently use none — fine).
-      Auth is already OAuth-only, which the form requires. Until this is
-      approved, keep it to friends-and-family scale or have users paste
-      personal access tokens (no cap, always available on `/settings`).
+### Lift the YNAB OAuth app out of Restricted Mode
+
+A freshly registered OAuth app is token-capped (~25 access tokens), so
+beyond a handful of connected users new "Connect to YNAB" authorizations
+fail. Removing the cap means passing YNAB's OAuth App Review (Asana form).
+Not blocking for friends-and-family scale — users can always paste a
+personal access token on `/settings` (no cap). The review's prerequisites,
+each as its own task:
+
+- [ ] **Footer trademark disclaimer.** Add to every page footer
+      (`templates/base.html`): "We are not affiliated, associated, or in
+      any way officially connected with YNAB… The names YNAB and You Need A
+      Budget… are registered trademarks of YNAB." (Exact wording is on the
+      review form.)
+- [ ] **Real Privacy Policy page.** Add a `/privacy` route + page that
+      explains how data obtained through the YNAB API is handled, stored,
+      and secured (today it's only the landing-page blurb). Link it from the
+      footer and use its URL in Developer Settings + the review form.
+- [ ] **"Plan" not "budget" branding.** YNAB brand language prefers "plan"
+      over "budget" where applicable; the UI/copy say "budget" throughout.
+      Decide how far to reword, and make sure nothing implies YNAB
+      endorsement.
+- [ ] **Confirm name uniqueness + logo rules.** App name must not already
+      be on the Works With YNAB list; no YNAB logos except the authorized
+      "Works with YNAB" logo (we use none today — just verify).
+- [ ] **Submit the OAuth App Review form** (Asana) once the above are live,
+      to have Restricted Mode removed. Auth is already OAuth-only, which the
+      form requires.
 - [x] **Multi-user.** Done (2026-07): email+password signup like rmillan's,
       per-user YNAB credentials (OAuth or PAT), conversions scoped by
       `user_id`, all in SQLite (`data/app.db` — users, ynab_connections,
