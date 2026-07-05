@@ -60,22 +60,37 @@ servers (see `tests/` and `test_app_flow.py`).
 
 ## Deploy
 
-Docker Compose; the container binds to **127.0.0.1:8000** (not public) and is
-meant to sit behind a reverse proxy that terminates TLS. Config via `.env`
-(`APP_PASSWORD`, `SECRET_KEY`, `YNAB_TOKEN`) — see `.env.example` and
-`DEPLOY.md`.
+Live at **https://ynabfx.davidgrant.ca**. Verify from outside with
+`curl -s -o /dev/null -w "%{http_code}" https://ynabfx.davidgrant.ca/login`
+→ 200 (plain GET — agent sandbox proxies 405 HEAD requests).
 
-**Auto-deploy:** merging/pushing to the default branch deploys itself. CI
-(`.github/workflows/ci.yml`) runs pytest; a cron job on the server runs
-`deploy/autodeploy.sh` every 2 minutes, which fast-forwards and rebuilds when
-new commits on the default branch have green checks (no secrets — the server
-polls public GitHub over HTTPS). Manual fallback:
+Docker Compose; the container binds to **127.0.0.1:8000** (not public).
+Server: David's Linode (Debian 12), app at `~/YNAB-currency-converter`,
+fronted by host nginx (vhost `/etc/nginx/sites-available/ynabfx.davidgrant.ca`
+→ `proxy_pass http://127.0.0.1:8000`) with a certbot Let's Encrypt cert
+(auto-renew via timer). `docker compose` works without sudo; sudo needs a
+password. Secrets (`APP_PASSWORD`, `SECRET_KEY`, `YNAB_TOKEN`) live only in
+`.env` on the server, set by David — never ask for or print them. See
+`.env.example` and `DEPLOY.md`.
 
-```bash
-git pull && docker compose up -d --build
-```
+**Auto-deploy:** merging/pushing to the default branch (`master`) IS the
+deploy process. CI (`.github/workflows/ci.yml`) runs pytest; a cron job in
+user david's crontab (every 2 min, flock-guarded) runs `deploy/autodeploy.sh`,
+which fast-forwards and rebuilds only when new default-branch commits have
+green checks (no secrets — the server polls public GitHub over HTTPS), then
+health-checks `/login`. Latency ~2 min + build. Logs: `~/autodeploy.log`;
+last deployed SHA: `~/YNAB-currency-converter/.last-deployed`. Pause by
+commenting out the crontab line. Manual fallback only:
+`git pull && docker compose up -d --build`.
 
-## Out of scope (v1) / future ideas
+**Agents cannot SSH to the server** — the sandbox egress proxy relays TLS
+only (it also blocks `api.github.com`; use the GitHub MCP tools). All server
+work is guided-manual: give David short copy-paste commands for his Linode
+Lish web console and have him paste back output. He's often on a phone —
+keep commands short and output minimal.
 
-Multi-user accounts, Google Sign-In, daily auto-sync scheduler, crypto
-currencies, YNAB OAuth (currently a personal access token).
+## Future work
+
+See `TODOS.md` — the maintained backlog (features, known bugs like split
+transactions, ops). Bigger arcs: multi-user, Google Sign-In, auto-sync
+scheduler, crypto, YNAB OAuth (currently a personal access token).
