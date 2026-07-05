@@ -277,9 +277,13 @@ async def apply(request: Request, conversion_id: str):
         current = ynab.get_transactions(
             conversion["budget_id"], conversion["account_id"], conversion["start_date"]
         )
+        # Only patch transactions that still exist and are not splits. A txn
+        # deleted in YNAB between preview and approval would otherwise make the
+        # whole bulk PATCH fail, applying nothing.
+        present_ids = {t["id"] for t in current}
         split_ids = {t["id"] for t in current if is_split(t)}
-        safe = [u for u in updates if u["id"] not in split_ids]
-        skipped_splits = len(updates) - len(safe)
+        safe = [u for u in updates if u["id"] in present_ids and u["id"] not in split_ids]
+        skipped_splits = sum(1 for u in updates if u["id"] in split_ids)
         if safe:
             updated = ynab.update_transactions(conversion["budget_id"], safe)
     suffix = f"&skipped_splits={skipped_splits}" if skipped_splits else ""

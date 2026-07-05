@@ -124,6 +124,33 @@ def test_apply_recheck_skips_transactions_that_became_splits(app_client):
     assert "1 skipped" in followed.text
 
 
+@respx.mock
+def test_apply_drops_transactions_deleted_since_preview(app_client):
+    # t1 was previewed but no longer exists in YNAB by apply time; t2 still does.
+    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": [
+            {"id": "t2", "date": "2024-01-05", "amount": -2000000,
+             "payee_name": "Sushi", "memo": None, "deleted": False},
+        ]}})
+    )
+    patch_route = respx.patch(f"{YNAB}/budgets/b1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": [{"id": "t2"}]}})
+    )
+    token = login(app_client)
+    conversion_id = make_conversion(app_client, token)
+    response = app_client.post(f"/conversions/{conversion_id}/apply", data={
+        "selected": ["t1", "t2"],
+        "amount_t1": "-15990", "memo_t1": "x",
+        "amount_t2": "-17600", "memo_t2": "y",
+        "csrf_token": token,
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    # only the still-present t2 is patched; the deleted t1 is dropped
+    assert response.headers["location"].endswith("?applied=1")
+    body = patch_route.calls[0].request.content.decode()
+    assert '"t2"' in body and '"t1"' not in body
+
+
 def test_unhandled_exception_gets_friendly_500_with_headers(app_client):
     @app_client.app.get("/boom")
     def boom():

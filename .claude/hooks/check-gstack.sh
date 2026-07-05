@@ -13,7 +13,11 @@ Install it:
 
 Then restart your AI coding tool.
 MSG
-  echo '{"permissionDecision":"deny","message":"gstack is required but not installed. See stderr for install instructions."}'
+  # Claude Code recognizes a PreToolUse deny only under hookSpecificOutput
+  # (a bare top-level permissionDecision at exit 0 is ignored — fails open).
+  cat <<'JSON'
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"gstack is required but not installed. See stderr for install instructions."}}
+JSON
   exit 0
 fi
 

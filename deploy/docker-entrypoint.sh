@@ -6,11 +6,17 @@
 # aren't guaranteed in the slim image.
 set -e
 if [ "$(id -u)" = "0" ]; then
-    chown -R app:app /srv/data
-    exec python3 -c 'import os, sys
-os.setgroups([1000])
-os.setgid(1000)
-os.setuid(1000)
+    # Best-effort: a read-only or root-squashed data mount shouldn't crash-loop
+    # the container. If chown fails, writes may fail later with a clear error.
+    chown -R app:app /srv/data 2>/dev/null \
+        || echo "entrypoint: warning: could not chown /srv/data (continuing)" >&2
+    # Derive uid/gid from the app user rather than hardcoding 1000 — useradd
+    # only guarantees the uid, not that the auto-created group's gid is 1000.
+    exec python3 -c 'import os, pwd, sys
+p = pwd.getpwnam("app")
+os.setgroups([p.pw_gid])
+os.setgid(p.pw_gid)
+os.setuid(p.pw_uid)
 os.execvp(sys.argv[1], sys.argv[1:])' "$@"
 fi
 exec "$@"
