@@ -86,6 +86,21 @@ def _reject_duplicate_account(account_id: str, except_conversion_id: str | None 
         raise HTTPException(409, "That account already has a conversion configured")
 
 
+def _validate_to_currency(budget_id: str, to_currency: str) -> None:
+    """The 'to' currency must be the budget's own currency — check YNAB rather
+    than trusting the form field."""
+    budget = next((b for b in get_ynab().get_budgets() if b["id"] == budget_id), None)
+    if budget is None:
+        raise HTTPException(400, "Unknown budget")
+    budget_currency = (budget.get("currency_format") or {}).get("iso_code", "")
+    if budget_currency and to_currency != budget_currency:
+        raise HTTPException(
+            400,
+            f"Budget '{budget['name']}' uses {budget_currency}; transactions must be "
+            f"converted to {budget_currency}, not {to_currency}",
+        )
+
+
 @router.get("/conversions/new")
 def new_form(request: Request):
     return templates.TemplateResponse(
@@ -107,6 +122,7 @@ def create(
 ):
     date.fromisoformat(start_date)
     _reject_duplicate_account(account_id)
+    _validate_to_currency(budget_id, to_currency.upper())
     conversion = get_store().add(
         {
             "budget_id": budget_id,
@@ -161,6 +177,7 @@ def edit(
 ):
     date.fromisoformat(start_date)
     _reject_duplicate_account(account_id, except_conversion_id=conversion_id)
+    _validate_to_currency(budget_id, to_currency.upper())
     updated = get_store().update(
         conversion_id,
         {

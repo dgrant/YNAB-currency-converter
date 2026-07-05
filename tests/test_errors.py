@@ -2,13 +2,14 @@
 import respx
 from httpx import ConnectError, Response
 
-from tests.test_app_flow import login
+from tests.test_app_flow import login, mock_budgets
 
 YNAB = "https://api.ynab.com/v1"
 FX = "https://api.frankfurter.dev/v1"
 
 
 def make_conversion(client):
+    mock_budgets()
     response = client.post("/conversions", data={
         "budget_id": "b1", "budget_name": "My Budget",
         "account_id": "a1", "account_name": "Japan Trip",

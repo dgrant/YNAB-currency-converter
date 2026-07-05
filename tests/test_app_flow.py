@@ -17,6 +17,16 @@ def login(client):
     assert response.status_code == 303
 
 
+def mock_budgets(iso_code="USD"):
+    """Create/edit validate to_currency against the budget's currency in YNAB."""
+    return respx.get(f"{YNAB}/budgets").mock(
+        return_value=Response(200, json={"data": {"budgets": [
+            {"id": "b1", "name": "My Budget",
+             "currency_format": {"iso_code": iso_code}},
+        ]}})
+    )
+
+
 def test_login_required(app_client):
     response = app_client.get("/conversions", follow_redirects=False)
     assert response.status_code == 303
@@ -30,6 +40,7 @@ def test_wrong_password_rejected(app_client):
 
 @respx.mock
 def test_full_conversion_flow(app_client):
+    mock_budgets()
     respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
         return_value=Response(200, json={"data": {"transactions": [
             {"id": "t1", "date": "2024-01-05", "amount": -1817000,
@@ -90,6 +101,7 @@ def test_full_conversion_flow(app_client):
 
 @respx.mock
 def test_apply_with_nothing_selected_patches_nothing(app_client):
+    mock_budgets()
     patch_route = respx.patch(f"{YNAB}/budgets/b1/transactions")
     login(app_client)
     response = app_client.post("/conversions", data={
@@ -173,7 +185,33 @@ def test_edit_conversion(app_client):
     }).status_code == 404
 
 
+@respx.mock
+def test_to_currency_must_match_budget_currency(app_client):
+    # The budget is USD, so a conversion "to EUR" is a form mismatch -> 400
+    mock_budgets(iso_code="USD")
+    login(app_client)
+    response = app_client.post("/conversions", data={
+        "budget_id": "b1", "budget_name": "My Budget",
+        "account_id": "a1", "account_name": "Japan Trip",
+        "from_currency": "JPY", "to_currency": "EUR",
+        "start_date": "2024-01-01",
+    })
+    assert response.status_code == 400
+    assert "uses USD" in response.text
+
+    # an unknown budget id is rejected too
+    response = app_client.post("/conversions", data={
+        "budget_id": "nope", "budget_name": "Ghost",
+        "account_id": "a9", "account_name": "Ghost account",
+        "from_currency": "JPY", "to_currency": "USD",
+        "start_date": "2024-01-01",
+    })
+    assert response.status_code == 400
+
+
+@respx.mock
 def test_duplicate_account_rejected(app_client):
+    mock_budgets()
     login(app_client)
     japan = {
         "budget_id": "b1", "budget_name": "My Budget",
