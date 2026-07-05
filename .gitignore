@@ -1,5 +1,6 @@
 .env
 data/
+.last-deployed
 __pycache__/
 *.pyc
 .pytest_cache/
