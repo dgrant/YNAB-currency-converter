@@ -16,12 +16,16 @@
 <p class="hint">{{ skipped_splits }} split transaction{{ "s" if skipped_splits != 1 }} skipped —
    split transactions aren't supported yet; convert them manually in YNAB.</p>
 {% endif %}
+{% if skipped_marked %}
+<p class="hint">{{ skipped_marked }} transaction{{ "s" if skipped_marked != 1 }} marked
+   “(skipped)” {{ "are" if skipped_marked != 1 else "is" }} excluded.</p>
+{% endif %}
 <form method="post" action="/conversions/{{ conversion.id }}/apply">
   {{ csrf_input(request) }}
   <table>
     <thead>
       <tr>
-        <th><input type="checkbox" checked onclick="document.querySelectorAll('.row-check').forEach(c => c.checked = this.checked)"></th>
+        <th><input type="checkbox" checked onclick="document.querySelectorAll('.row-check').forEach(c => c.checked = this.checked); updateTotals()"></th>
         <th>Date</th>
         <th>Payee</th>
         <th>Action</th>
@@ -33,7 +37,7 @@
     </thead>
     <tbody>
       {% for row in rows %}
-      <tr>
+      <tr data-original="{{ row.original_milliunits }}" data-converted="{{ row.new_milliunits }}">
         <td>
           <input type="checkbox" class="row-check" name="selected" value="{{ row.id }}" checked>
           <input type="hidden" name="amount_{{ row.id }}" value="{{ row.new_milliunits }}">
@@ -45,10 +49,11 @@
         <td>{{ row.payee_name }}</td>
         <td class="action">
           <select name="action_{{ row.id }}"
+                  aria-label="Action for {{ row.payee_name or 'transaction' }} on {{ row.date }}"
                   onchange="this.closest('tr').classList.toggle('no-convert', this.value !== 'convert')">
             <option value="convert">Convert</option>
-            <option value="already">Memo ≈{{ row.equivalent_display }} (already {{ conversion.to_currency }})</option>
-            <option value="skip">Skip forever (already {{ conversion.to_currency }})</option>
+            <option value="already">Memo ≈{{ row.equivalent_display }}</option>
+            <option value="skip">Skip forever</option>
           </select>
         </td>
         <td class="memo">{{ row.old_memo }}</td>
@@ -61,17 +66,52 @@
     {% if totals %}
     <tfoot>
       <tr>
-        <td colspan="4">Total ({{ rows | length }} row{{ "s" if rows | length != 1 }})</td>
+        <td colspan="4" id="total-label">Total ({{ rows | length }} row{{ "s" if rows | length != 1 }})</td>
         <td class="memo"></td>
-        <td class="num">{{ totals.original }}</td>
+        <td class="num" id="total-original">{{ totals.original }}</td>
         <td></td>
-        <td class="num">{{ totals.converted }}</td>
+        <td class="num" id="total-converted">{{ totals.converted }}</td>
       </tr>
     </tfoot>
     {% endif %}
   </table>
   <button type="submit" class="primary">Approve selected &amp; update YNAB</button>
 </form>
+<script>
+  const fmtOriginal = new Intl.NumberFormat("en-US",
+    {minimumFractionDigits: {{ from_digits }}, maximumFractionDigits: {{ from_digits }}});
+  const fmtConverted = new Intl.NumberFormat("en-US",
+    {minimumFractionDigits: {{ to_digits }}, maximumFractionDigits: {{ to_digits }}});
+
+  // Keep the footer honest: total only the rows that will actually be
+  // converted (ticked + action "Convert"); memo-only rows don't change amounts.
+  function updateTotals() {
+    let original = 0, converted = 0, count = 0;
+    document.querySelectorAll("tbody tr").forEach(tr => {
+      const checked = tr.querySelector(".row-check").checked;
+      const action = tr.querySelector("td.action select").value;
+      if (checked && action === "convert") {
+        original += Number(tr.dataset.original);
+        converted += Number(tr.dataset.converted);
+        count += 1;
+      }
+    });
+    document.getElementById("total-label").textContent =
+      `Total to convert (${count} row${count === 1 ? "" : "s"})`;
+    document.getElementById("total-original").textContent =
+      count ? `${fmtOriginal.format(original / 1000)} {{ conversion.from_currency }}` : "—";
+    document.getElementById("total-converted").textContent =
+      count ? fmtConverted.format(converted / 1000) : "—";
+  }
+
+  document.querySelectorAll(".row-check, td.action select").forEach(el =>
+    el.addEventListener("change", updateTotals));
+  // Also runs on load: browsers restoring form state (back button, reload)
+  // don't fire change events, so re-sync the strikethrough and totals.
+  document.querySelectorAll("td.action select").forEach(s =>
+    s.closest("tr").classList.toggle("no-convert", s.value !== "convert"));
+  updateTotals();
+</script>
 {% else %}
 <div class="card">
   <p>Nothing to convert — all {{ total_fetched }} transaction{{ "s" if total_fetched != 1 }}

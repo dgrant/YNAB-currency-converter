@@ -86,17 +86,41 @@ def test_connection_error_is_retried_then_friendly(app_client):
 def test_malformed_apply_form_is_a_400_not_a_500(app_client):
     token = login(app_client)
     conversion_id = make_conversion(app_client, token)
-    # selected id with no amount_/memo_ fields (tampered or stale form)
+    # selected id with no action/amount/memo fields at all (tampered or stale form)
     response = app_client.post(f"/conversions/{conversion_id}/apply", data={
         "selected": ["t1"], "csrf_token": token,
     })
     assert response.status_code == 400
     assert "Malformed apply form" in response.text
-    # non-numeric amount
+    # action present but amount_/memo_ missing
     response = app_client.post(f"/conversions/{conversion_id}/apply", data={
-        "selected": ["t1"], "amount_t1": "abc", "memo_t1": "x", "csrf_token": token,
+        "selected": ["t1"], "action_t1": "convert", "csrf_token": token,
     })
     assert response.status_code == 400
+    # non-numeric amount
+    response = app_client.post(f"/conversions/{conversion_id}/apply", data={
+        "selected": ["t1"], "action_t1": "convert",
+        "amount_t1": "abc", "memo_t1": "x", "csrf_token": token,
+    })
+    assert response.status_code == 400
+    # a pre-actions form (no action_ field) must not silently convert
+    response = app_client.post(f"/conversions/{conversion_id}/apply", data={
+        "selected": ["t1"], "amount_t1": "-15990", "memo_t1": "x", "csrf_token": token,
+    })
+    assert response.status_code == 400
+
+
+@respx.mock
+def test_malformed_already_and_skip_forms_are_a_400_not_a_500(app_client):
+    # action=already/skip whose corresponding memo field is missing (tampered form)
+    token = login(app_client)
+    conversion_id = make_conversion(app_client, token)
+    for action in ("already", "skip"):
+        response = app_client.post(f"/conversions/{conversion_id}/apply", data={
+            "selected": ["t1"], "action_t1": action, "csrf_token": token,
+        })
+        assert response.status_code == 400
+        assert "Malformed apply form" in response.text
 
 
 @respx.mock
@@ -114,7 +138,8 @@ def test_apply_recheck_skips_transactions_that_became_splits(app_client):
     token = login(app_client)
     conversion_id = make_conversion(app_client, token)
     response = app_client.post(f"/conversions/{conversion_id}/apply", data={
-        "selected": ["t1"], "amount_t1": "-15990", "memo_t1": "x",
+        "selected": ["t1"], "action_t1": "convert",
+        "amount_t1": "-15990", "memo_t1": "x",
         "csrf_token": token,
     }, follow_redirects=False)
     assert response.status_code == 303
@@ -122,6 +147,17 @@ def test_apply_recheck_skips_transactions_that_became_splits(app_client):
     assert not patch_route.called
     followed = app_client.get(response.headers["location"])
     assert "1 skipped" in followed.text
+
+    # memo-only actions are dropped for became-splits too: conservative, and
+    # pins the behavior either way
+    response = app_client.post(f"/conversions/{conversion_id}/apply", data={
+        "selected": ["t1"], "action_t1": "skip",
+        "amount_t1": "-15990", "memo_t1": "x", "skip_memo_t1": "(skipped)",
+        "csrf_token": token,
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("?applied=0&skipped_splits=1")
+    assert not patch_route.called
 
 
 @respx.mock
@@ -140,8 +176,8 @@ def test_apply_drops_transactions_deleted_since_preview(app_client):
     conversion_id = make_conversion(app_client, token)
     response = app_client.post(f"/conversions/{conversion_id}/apply", data={
         "selected": ["t1", "t2"],
-        "amount_t1": "-15990", "memo_t1": "x",
-        "amount_t2": "-17600", "memo_t2": "y",
+        "action_t1": "convert", "amount_t1": "-15990", "memo_t1": "x",
+        "action_t2": "convert", "amount_t2": "-17600", "memo_t2": "y",
         "csrf_token": token,
     }, follow_redirects=False)
     assert response.status_code == 303
@@ -149,6 +185,33 @@ def test_apply_drops_transactions_deleted_since_preview(app_client):
     assert response.headers["location"].endswith("?applied=1")
     body = patch_route.calls[0].request.content.decode()
     assert '"t2"' in body and '"t1"' not in body
+
+
+@respx.mock
+def test_apply_drops_transactions_already_actioned_since_preview(app_client):
+    # By apply time t1 was converted (FX marker) and t2 skipped in another
+    # tab/session; a stale form resubmit must not clobber either decision.
+    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": [
+            {"id": "t1", "date": "2024-01-05", "amount": -15990,
+             "payee_name": "Ramen", "memo": "-1,817 JPY (FX rate: 0.0087987)",
+             "deleted": False},
+            {"id": "t2", "date": "2024-01-05", "amount": -61000,
+             "payee_name": "Reconciliation", "memo": "(skipped)", "deleted": False},
+        ]}})
+    )
+    patch_route = respx.patch(f"{YNAB}/budgets/b1/transactions")
+    token = login(app_client)
+    conversion_id = make_conversion(app_client, token)
+    response = app_client.post(f"/conversions/{conversion_id}/apply", data={
+        "selected": ["t1", "t2"],
+        "action_t1": "convert", "amount_t1": "-15990", "memo_t1": "stale memo",
+        "action_t2": "convert", "amount_t2": "-540", "memo_t2": "stale memo",
+        "csrf_token": token,
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("?applied=0")
+    assert not patch_route.called
 
 
 def test_unhandled_exception_gets_friendly_500_with_headers(app_client):

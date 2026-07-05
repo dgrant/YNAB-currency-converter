@@ -7,9 +7,10 @@ from ..auth import require_login
 from ..config import get_settings
 from ..convert import (
     build_preview,
+    decimal_digits,
     format_amount,
     format_original,
-    is_converted,
+    is_excluded,
     is_skipped,
     is_split,
 )
@@ -219,8 +220,9 @@ def preview(request: Request, conversion_id: str):
         conversion["budget_id"], conversion["account_id"], conversion["start_date"]
     )
     pending, skipped_splits = [], 0
+    skipped_marked = sum(1 for t in transactions if is_skipped(t.get("memo")))
     for txn in transactions:
-        if txn["amount"] == 0 or is_converted(txn.get("memo")) or is_skipped(txn.get("memo")):
+        if is_excluded(txn):
             continue
         if is_split(txn):
             skipped_splits += 1
@@ -253,7 +255,10 @@ def preview(request: Request, conversion_id: str):
             "rows": rows,
             "totals": totals,
             "skipped_splits": skipped_splits,
+            "skipped_marked": skipped_marked,
             "total_fetched": len(transactions),
+            "from_digits": decimal_digits(conversion["from_currency"]),
+            "to_digits": decimal_digits(conversion["to_currency"]),
         },
     )
 
@@ -265,7 +270,9 @@ async def apply(request: Request, conversion_id: str):
     try:
         updates = []
         for txn_id in form.getlist("selected"):
-            action = str(form.get(f"action_{txn_id}") or "convert")
+            # Required: a missing action must not silently default to convert
+            # (the one action that rewrites the amount) — KeyError -> 400.
+            action = str(form[f"action_{txn_id}"])
             if action == "convert":
                 updates.append(
                     {
@@ -274,10 +281,14 @@ async def apply(request: Request, conversion_id: str):
                         "memo": str(form[f"memo_{txn_id}"])[:500],
                     }
                 )
-            elif action in ("already", "skip"):
+            elif action == "already":
                 # Amount is already in the budget currency — patch the memo only.
                 updates.append(
-                    {"id": txn_id, "memo": str(form[f"{action}_memo_{txn_id}"])[:500]}
+                    {"id": txn_id, "memo": str(form[f"already_memo_{txn_id}"])[:500]}
+                )
+            elif action == "skip":
+                updates.append(
+                    {"id": txn_id, "memo": str(form[f"skip_memo_{txn_id}"])[:500]}
                 )
             else:
                 raise ValueError(f"unknown action {action!r}")
@@ -296,10 +307,20 @@ async def apply(request: Request, conversion_id: str):
         )
         # Only patch transactions that still exist and are not splits. A txn
         # deleted in YNAB between preview and approval would otherwise make the
-        # whole bulk PATCH fail, applying nothing.
+        # whole bulk PATCH fail, applying nothing. Also drop anything that got
+        # converted or skipped since the preview (stale form, second tab,
+        # back-button resubmit) — its marker means that decision already
+        # happened, and overwriting would clobber it.
         present_ids = {t["id"] for t in current}
         split_ids = {t["id"] for t in current if is_split(t)}
-        safe = [u for u in updates if u["id"] in present_ids and u["id"] not in split_ids]
+        stale_ids = {t["id"] for t in current if is_excluded(t)}
+        safe = [
+            u
+            for u in updates
+            if u["id"] in present_ids
+            and u["id"] not in split_ids
+            and u["id"] not in stale_ids
+        ]
         skipped_splits = sum(1 for u in updates if u["id"] in split_ids)
         if safe:
             updated = ynab.update_transactions(conversion["budget_id"], safe)

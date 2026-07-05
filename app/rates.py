@@ -68,6 +68,10 @@ class RateTable:
         for _ in range(LOOKBACK_DAYS + 1):
             rate = self._rates.get(day.isoformat())
             if rate is not None:
+                # A zero/negative rate from the API would zero out conversions and
+                # crash the inverse-equivalent division — refuse it upfront.
+                if rate <= 0:
+                    raise RatesError(f"Invalid exchange rate {rate} for {day.isoformat()}")
                 return rate
             day -= timedelta(days=1)
         raise RatesError(f"No rate available on or before {day}")

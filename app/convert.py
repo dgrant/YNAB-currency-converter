@@ -12,8 +12,13 @@ MARKER_RE = re.compile(r"\(FX rate: [0-9]*\.?[0-9]+\)")
 # Memo marker for transactions the user chose to never convert (e.g. a
 # reconciliation entry already recorded in the budget currency). Matches
 # the marker rmillan's service appears to use for its skip feature.
+# Case-insensitive: a hand-typed "(Skipped)" must not get re-proposed —
+# a too-narrow match risks converting an already-budget-currency amount.
 SKIPPED_MARKER = "(skipped)"
-SKIPPED_RE = re.compile(re.escape(SKIPPED_MARKER))
+SKIPPED_RE = re.compile(re.escape(SKIPPED_MARKER), re.IGNORECASE)
+
+# YNAB's memo length limit.
+MEMO_MAX = 500
 
 # ISO 4217 currencies with no minor unit (whole-number amounts).
 ZERO_DECIMAL_CURRENCIES = {
@@ -37,16 +42,17 @@ def is_split(txn: dict) -> bool:
     return bool(txn.get("subtransactions"))
 
 
+def is_excluded(txn: dict) -> bool:
+    """Never proposed, regardless of split status: zero amount, already
+    converted, or marked skipped."""
+    memo = txn.get("memo")
+    return txn["amount"] == 0 or is_converted(memo) or is_skipped(memo)
+
+
 def is_convertible(txn: dict) -> bool:
     """The single source of truth for which transactions get proposed:
-    nonzero, not already converted, not skipped, and not a split."""
-    memo = txn.get("memo")
-    return (
-        txn["amount"] != 0
-        and not is_converted(memo)
-        and not is_skipped(memo)
-        and not is_split(txn)
-    )
+    not excluded and not a split."""
+    return not is_excluded(txn) and not is_split(txn)
 
 
 def decimal_digits(currency: str) -> int:
@@ -99,7 +105,15 @@ def build_marker(milliunits: int, from_currency: str, rate: float) -> str:
 
 
 def _append_marker(old_memo: str | None, marker: str) -> str:
-    return f"{old_memo} {marker}" if old_memo else marker
+    """Append a marker, truncating the original memo if needed so the marker —
+    which future previews rely on to exclude the transaction — always survives
+    YNAB's 500-char memo limit intact."""
+    if not old_memo:
+        return marker
+    room = MEMO_MAX - len(marker) - 1
+    if len(old_memo) > room:
+        old_memo = old_memo[:room].rstrip()
+    return f"{old_memo} {marker}"
 
 
 def build_memo(old_memo: str | None, milliunits: int, from_currency: str, rate: float) -> str:

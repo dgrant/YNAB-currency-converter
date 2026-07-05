@@ -20,7 +20,9 @@ not break (memo marker format, milliunit math, preview→approve contract).
       needed to reverse an apply: original amount and rate. Parse
       `-1,817 JPY (FX rate: 0.0087987)` back out, restore the original
       milliunits, strip the marker from the memo. Per-transaction and
-      whole-batch undo on the applied page.
+      whole-batch undo on the applied page. **Must exclude `≈ …` equivalence
+      markers** (the "already in budget currency" action): those amounts were
+      never changed, so "restoring" the parsed value would corrupt them.
 - [x] **Skip transactions + "already in budget currency" actions.** Done:
       each preview row has an Action select — *Convert* (default),
       *Already \<CUR\> (memo ≈… )* for amounts entered in the budget currency

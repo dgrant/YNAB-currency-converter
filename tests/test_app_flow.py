@@ -195,6 +195,7 @@ def test_full_conversion_flow(app_client):
 
     applied = app_client.post(f"/conversions/{conversion_id}/apply", data={
         "selected": ["t1"],
+        "action_t1": "convert",
         "amount_t1": "-15990",
         "memo_t1": "-1,817 JPY (FX rate: 0.0087987)",
         "csrf_token": token,
@@ -278,10 +279,8 @@ def test_already_in_budget_currency_and_skip_actions(app_client):
 
 @respx.mock
 def test_apply_rejects_unknown_action(app_client):
+    # the 400 fires while parsing the form, before any transactions fetch
     mock_budgets()
-    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
-        return_value=Response(200, json={"data": {"transactions": []}})
-    )
     token = login(app_client)
     response = app_client.post("/conversions", data={
         "budget_id": "b1", "budget_name": "My Budget",
