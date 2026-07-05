@@ -142,6 +142,19 @@ not break (memo marker format, milliunit math, preview→approve contract).
 
 ## UX
 
+- [ ] **Public landing / home page.** Today `/` redirects straight to
+      `/conversions` (behind login), so an unauthenticated visitor only ever
+      sees the bare login form. Make `/` a nice public page that pitches the
+      app — what it does (enter YNAB transactions in their original foreign
+      currency, get them converted with date-accurate ECB rates), a
+      screenshot of the preview table, how it works in three steps
+      (create conversion → preview → approve), and a "nothing is written to
+      YNAB without your approval / no data stored" privacy angle — with a
+      log-in button in the corner. rmillan.com's front page is the
+      reference for tone. Low stakes while single-user, but it's the front
+      door if multi-user sign-up ever opens, and it makes the URL shareable
+      in the meantime. Server-rendered like everything else; no JS framework
+      needed.
 - [ ] **Mobile-friendly styling.** Primary usage is from a phone. The preview
       table (7 columns) needs a responsive treatment — collapse to cards or
       hide the memo column on small screens.
