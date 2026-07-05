@@ -13,7 +13,10 @@ from ..ynab import YNABClient
 
 router = APIRouter(dependencies=[Depends(require_login)])
 
+# Both HTTP clients are process-wide singletons so connections are pooled
+# across requests (tests reset them; see conftest.py).
 _rates_client: FrankfurterClient | None = None
+_ynab_client: YNABClient | None = None
 
 
 def get_store() -> ConversionStore:
@@ -21,10 +24,13 @@ def get_store() -> ConversionStore:
 
 
 def get_ynab() -> YNABClient:
-    settings = get_settings()
-    if not settings.ynab_token:
-        raise HTTPException(500, "YNAB_TOKEN is not configured")
-    return YNABClient(settings.ynab_token, settings.ynab_api_base)
+    global _ynab_client
+    if _ynab_client is None:
+        settings = get_settings()
+        if not settings.ynab_token:
+            raise HTTPException(500, "YNAB_TOKEN is not configured")
+        _ynab_client = YNABClient(settings.ynab_token, settings.ynab_api_base)
+    return _ynab_client
 
 
 def get_rates_client() -> FrankfurterClient:

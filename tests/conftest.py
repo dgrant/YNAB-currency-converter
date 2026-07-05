@@ -14,6 +14,11 @@ def app_client(tmp_path, monkeypatch):
 
     monkeypatch.setattr(config, "_settings", None)
     monkeypatch.setattr(conversions_routes, "_rates_client", None)
+    monkeypatch.setattr(conversions_routes, "_ynab_client", None)
+
+    import app.http as app_http
+
+    monkeypatch.setattr(app_http, "RETRY_DELAY_SECONDS", 0)
 
     from fastapi.testclient import TestClient
 
