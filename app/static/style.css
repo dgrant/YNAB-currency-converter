@@ -185,3 +185,11 @@ tfoot td { background: var(--th-bg); font-weight: 600; border-top: 2px solid var
   th, td { padding: 0.45rem 0.5rem; font-size: 0.85rem; }
   table { display: block; overflow-x: auto; }
 }
+
+footer {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0.5rem 1rem 1.5rem;
+  text-align: center;
+  font-size: 0.8rem;
+}

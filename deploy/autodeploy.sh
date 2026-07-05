@@ -50,12 +50,14 @@ else:
 
   echo "$(date -Is) deploying $deployed_sha -> $remote_sha"
   git merge --ff-only "origin/$branch"
-  docker compose up -d --build
+  GIT_SHA="$remote_sha" docker compose up -d --build
   echo "$remote_sha" >"$stamp"
 
   sleep 5
-  if curl -fsS -o /dev/null http://127.0.0.1:8000/login; then
-    echo "$(date -Is) deployed $remote_sha, health check OK"
+  if curl -fsS http://127.0.0.1:8000/healthz | grep -q "$remote_sha"; then
+    echo "$(date -Is) deployed $remote_sha, health check OK (version matches)"
+  elif curl -fsS -o /dev/null http://127.0.0.1:8000/healthz; then
+    echo "$(date -Is) deployed $remote_sha, WARNING: healthy but version mismatch"
   else
     echo "$(date -Is) deployed $remote_sha, WARNING: health check FAILED"
   fi

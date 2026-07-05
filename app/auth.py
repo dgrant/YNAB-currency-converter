@@ -60,6 +60,12 @@ async def verify_csrf(request: Request) -> None:
 router = APIRouter(dependencies=[Depends(verify_csrf)])
 
 
+@router.get("/healthz")
+def healthz():
+    """Unauthenticated liveness check; also answers 'what SHA is live?'."""
+    return {"status": "ok", "version": get_settings().app_version}
+
+
 @router.get("/")
 def home(request: Request):
     """Public landing page; logged-in users go straight to their conversions."""

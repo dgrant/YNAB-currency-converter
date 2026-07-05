@@ -55,6 +55,12 @@ def test_login_required(app_client):
     assert response.headers["location"] == "/login"
 
 
+def test_healthz_public_and_reports_version(app_client):
+    response = app_client.get("/healthz")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "version": "dev"}
+
+
 def test_landing_page_is_public(app_client):
     response = app_client.get("/")
     assert response.status_code == 200

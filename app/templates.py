@@ -17,4 +17,11 @@ def csrf_input(request: Request) -> Markup:
     return Markup(f'<input type="hidden" name="csrf_token" value="{token}">')
 
 
+def _app_version() -> str:
+    from .config import get_settings
+
+    return get_settings().app_version
+
+
 templates.env.globals["csrf_input"] = csrf_input
+templates.env.globals["app_version"] = _app_version
