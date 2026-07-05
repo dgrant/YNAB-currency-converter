@@ -27,6 +27,12 @@ def is_split(txn: dict) -> bool:
     return bool(txn.get("subtransactions"))
 
 
+def is_convertible(txn: dict) -> bool:
+    """The single source of truth for which transactions get proposed:
+    nonzero, not already converted, and not a split."""
+    return txn["amount"] != 0 and not is_converted(txn.get("memo")) and not is_split(txn)
+
+
 def decimal_digits(currency: str) -> int:
     return 0 if currency in ZERO_DECIMAL_CURRENCIES else 2
 
@@ -79,11 +85,7 @@ def build_preview(
     """Compute the proposed conversion for each not-yet-converted transaction."""
     rows = []
     for txn in transactions:
-        if is_converted(txn.get("memo")):
-            continue
-        if txn["amount"] == 0:
-            continue
-        if is_split(txn):
+        if not is_convertible(txn):
             continue
         rate = rates.rate_for(date.fromisoformat(txn["date"]))
         new_milliunits = convert_milliunits(txn["amount"], rate, to_currency)

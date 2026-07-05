@@ -2,7 +2,7 @@ from datetime import date, timedelta
 
 import httpx
 
-from .http import get_with_retry
+from .http import get_or_error
 
 # Fetch a few extra days before the first transaction so weekend/holiday
 # dates at the start of the range can fall back to a prior business day.
@@ -20,14 +20,13 @@ class FrankfurterClient:
         self._client = httpx.Client(base_url=base_url, timeout=30)
         self._currencies: dict[str, str] | None = None
 
-    def _get(self, path: str, params: dict | None = None) -> httpx.Response:
-        try:
-            response = get_with_retry(self._client, path, params)
-        except httpx.TransportError as exc:
-            raise RatesError(f"Could not reach the exchange-rate service: {exc}") from exc
+    def _get(self, path: str, params: dict | None = None, context: str = ""):
+        response = get_or_error(
+            self._client, path, params, RatesError, "the exchange-rate service"
+        )
         if response.status_code != 200:
             raise RatesError(
-                f"Frankfurter API error {response.status_code}: {response.text}"
+                f"Frankfurter API error {response.status_code}{context}: {response.text}"
             )
         return response
 
@@ -44,6 +43,7 @@ class FrankfurterClient:
         response = self._get(
             f"/{start - timedelta(days=LOOKBACK_DAYS)}..{end}",
             params={"base": from_currency, "symbols": to_currency},
+            context=f" for {from_currency}->{to_currency}",
         )
         rates = {
             day: symbols[to_currency]

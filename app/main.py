@@ -1,8 +1,11 @@
+import logging
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import auth
@@ -11,6 +14,16 @@ from .rates import RatesError
 from .routes import conversions
 from .templates import templates
 from .ynab import YNABError
+
+logger = logging.getLogger("ynabfx")
+
+_ERROR_TITLES = {
+    400: "Bad request",
+    403: "Forbidden",
+    404: "Not found",
+    409: "Conflict",
+    429: "Too many requests",
+}
 
 
 def _error_page(
@@ -26,7 +39,12 @@ def _error_page(
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title="YNAB Currency Converter")
+    # CSRF verification is app-level so every router — present and future —
+    # is covered without opting in (it no-ops on non-POST requests).
+    app = FastAPI(
+        title="YNAB Currency Converter",
+        dependencies=[Depends(auth.verify_csrf)],
+    )
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.secret_key,
@@ -36,7 +54,19 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception:
+            # Catch here (not in ServerErrorMiddleware) so 500s still get the
+            # security headers below and a friendly page instead of raw text.
+            logger.exception("Unhandled error for %s %s", request.method, request.url.path)
+            response = _error_page(
+                request,
+                "Something went wrong",
+                "An unexpected error occurred.",
+                "Try again; if it keeps happening, check the server logs.",
+                status_code=500,
+            )
         headers = response.headers
         headers.setdefault("X-Frame-Options", "DENY")
         headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -50,6 +80,20 @@ def create_app() -> FastAPI:
             "form-action 'self'; base-uri 'self'",
         )
         return response
+
+    @app.exception_handler(StarletteHTTPException)
+    async def friendly_http_error(request: Request, exc: StarletteHTTPException) -> Response:
+        # Redirect-style HTTPExceptions (the 303 used by require_login) keep
+        # the framework handler, which preserves their headers.
+        if exc.status_code < 400:
+            return await http_exception_handler(request, exc)
+        return _error_page(
+            request,
+            _ERROR_TITLES.get(exc.status_code, f"Error {exc.status_code}"),
+            str(exc.detail),
+            "Go back and try again.",
+            status_code=exc.status_code,
+        )
 
     @app.exception_handler(YNABError)
     async def ynab_error(request: Request, exc: YNABError) -> Response:

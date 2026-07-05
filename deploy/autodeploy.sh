@@ -54,13 +54,15 @@ else:
   echo "$remote_sha" >"$stamp"
 
   sleep 5
-  if curl -fsS http://127.0.0.1:8000/healthz | grep -q "$remote_sha"; then
-    echo "$(date -Is) deployed $remote_sha, health check OK (version matches)"
-  elif curl -fsS -o /dev/null http://127.0.0.1:8000/healthz; then
-    echo "$(date -Is) deployed $remote_sha, WARNING: healthy but version mismatch"
-  else
-    echo "$(date -Is) deployed $remote_sha, WARNING: health check FAILED"
-  fi
+  # Capture the body rather than piping into grep -q: under pipefail, grep -q
+  # exiting early can SIGPIPE curl and misreport a matching version.
+  local health
+  health=$(curl -fsS --max-time 10 http://127.0.0.1:8000/healthz || true)
+  case "$health" in
+    *"$remote_sha"*) echo "$(date -Is) deployed $remote_sha, health check OK (version matches)" ;;
+    "") echo "$(date -Is) deployed $remote_sha, WARNING: health check FAILED" ;;
+    *) echo "$(date -Is) deployed $remote_sha, WARNING: healthy but version mismatch" ;;
+  esac
 }
 
 main "$@"

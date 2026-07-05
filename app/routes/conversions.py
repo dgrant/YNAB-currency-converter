@@ -3,7 +3,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-from ..auth import require_login, verify_csrf
+from ..auth import require_login
 from ..config import get_settings
 from ..convert import build_preview, format_amount, format_original, is_converted, is_split
 from ..rates import FrankfurterClient
@@ -11,7 +11,7 @@ from ..store import ConversionStore
 from ..templates import templates
 from ..ynab import YNABClient
 
-router = APIRouter(dependencies=[Depends(require_login), Depends(verify_csrf)])
+router = APIRouter(dependencies=[Depends(require_login)])
 
 # Both HTTP clients are process-wide singletons so connections are pooled
 # across requests (tests reset them; see conftest.py).
@@ -140,10 +140,17 @@ def _get_conversion_or_404(conversion_id: str) -> dict:
 
 
 @router.get("/conversions/{conversion_id}")
-def detail(request: Request, conversion_id: str, applied: int | None = None):
+def detail(
+    request: Request,
+    conversion_id: str,
+    applied: int | None = None,
+    skipped_splits: int = 0,
+):
     conversion = _get_conversion_or_404(conversion_id)
     return templates.TemplateResponse(
-        request, "detail.html", {"conversion": conversion, "applied": applied}
+        request,
+        "detail.html",
+        {"conversion": conversion, "applied": applied, "skipped_splits": skipped_splits},
     )
 
 
@@ -204,11 +211,14 @@ def preview(request: Request, conversion_id: str):
     transactions = get_ynab().get_transactions(
         conversion["budget_id"], conversion["account_id"], conversion["start_date"]
     )
-    pending = [
-        t for t in transactions if t["amount"] != 0 and not is_converted(t.get("memo"))
-    ]
-    splits = [t for t in pending if is_split(t)]
-    pending = [t for t in pending if not is_split(t)]
+    pending, skipped_splits = [], 0
+    for txn in transactions:
+        if txn["amount"] == 0 or is_converted(txn.get("memo")):
+            continue
+        if is_split(txn):
+            skipped_splits += 1
+        else:
+            pending.append(txn)
     rows = []
     if pending:
         dates = [date.fromisoformat(t["date"]) for t in pending]
@@ -235,7 +245,7 @@ def preview(request: Request, conversion_id: str):
             "conversion": conversion,
             "rows": rows,
             "totals": totals,
-            "skipped_splits": len(splits),
+            "skipped_splits": skipped_splits,
             "total_fetched": len(transactions),
         },
     )
@@ -245,18 +255,34 @@ def preview(request: Request, conversion_id: str):
 async def apply(request: Request, conversion_id: str):
     conversion = _get_conversion_or_404(conversion_id)
     form = await request.form()
-    updates = []
-    for txn_id in form.getlist("selected"):
-        updates.append(
+    try:
+        updates = [
             {
                 "id": txn_id,
                 "amount": int(str(form[f"amount_{txn_id}"])),
                 "memo": str(form[f"memo_{txn_id}"])[:500],
             }
-        )
-    updated = []
+            for txn_id in form.getlist("selected")
+        ]
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(
+            400, "Malformed apply form — go back and run the preview again"
+        ) from exc
+    updated, skipped_splits = [], 0
     if updates:
-        updated = get_ynab().update_transactions(conversion["budget_id"], updates)
+        # Re-check split status at write time: a transaction may have become a
+        # split between preview render and approval, and patching a split
+        # parent's amount would corrupt or be rejected by YNAB.
+        ynab = get_ynab()
+        current = ynab.get_transactions(
+            conversion["budget_id"], conversion["account_id"], conversion["start_date"]
+        )
+        split_ids = {t["id"] for t in current if is_split(t)}
+        safe = [u for u in updates if u["id"] not in split_ids]
+        skipped_splits = len(updates) - len(safe)
+        if safe:
+            updated = ynab.update_transactions(conversion["budget_id"], safe)
+    suffix = f"&skipped_splits={skipped_splits}" if skipped_splits else ""
     return RedirectResponse(
-        f"/conversions/{conversion_id}?applied={len(updated)}", status_code=303
+        f"/conversions/{conversion_id}?applied={len(updated)}{suffix}", status_code=303
     )

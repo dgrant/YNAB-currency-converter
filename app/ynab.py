@@ -1,6 +1,6 @@
 import httpx
 
-from .http import get_with_retry
+from .http import get_or_error
 
 
 class YNABError(Exception):
@@ -20,10 +20,7 @@ class YNABClient:
         )
 
     def _get(self, path: str, params: dict | None = None) -> dict:
-        try:
-            response = get_with_retry(self._client, path, params)
-        except httpx.TransportError as exc:
-            raise YNABError(f"Could not reach YNAB: {exc}") from exc
+        response = get_or_error(self._client, path, params, YNABError, "YNAB")
         self._raise_for_status(response)
         return response.json()["data"]
 

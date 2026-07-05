@@ -1,7 +1,7 @@
 import secrets
 import time
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from .config import get_settings
@@ -27,8 +27,10 @@ def _lockout_remaining() -> int:
 def _record_login_failure() -> None:
     _throttle["failures"] += 1
     if _throttle["failures"] >= LOCKOUT_THRESHOLD:
-        delay = min(2.0 ** (_throttle["failures"] - LOCKOUT_THRESHOLD + 1), LOCKOUT_MAX_SECONDS)
-        _throttle["locked_until"] = time.monotonic() + delay
+        # Clamp the exponent (not just the result): failures grows without
+        # bound, and 2.0 ** ~1024 would raise OverflowError before min() ran.
+        exponent = min(_throttle["failures"] - LOCKOUT_THRESHOLD + 1, 16)
+        _throttle["locked_until"] = time.monotonic() + min(2.0**exponent, LOCKOUT_MAX_SECONDS)
 
 # Single-password auth for the single-user v1. To move to Google Sign-In
 # later, replace the routes below with an OIDC flow that sets the same
@@ -57,7 +59,8 @@ async def verify_csrf(request: Request) -> None:
         )
 
 
-router = APIRouter(dependencies=[Depends(verify_csrf)])
+# CSRF is enforced app-wide (see create_app); routers don't opt in individually.
+router = APIRouter()
 
 
 @router.get("/healthz")

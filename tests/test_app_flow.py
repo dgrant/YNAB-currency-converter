@@ -79,6 +79,18 @@ def test_wrong_password_rejected(app_client):
     assert response.status_code == 401
 
 
+def test_throttle_delay_never_overflows():
+    import app.auth as auth
+
+    auth._reset_throttle()
+    auth._throttle["failures"] = 5000
+    auth._record_login_failure()  # must not raise OverflowError
+    import time as time_mod
+
+    assert auth._throttle["locked_until"] - time_mod.monotonic() <= auth.LOCKOUT_MAX_SECONDS + 1
+    auth._reset_throttle()
+
+
 def test_login_brute_force_throttled(app_client):
     import app.auth as auth
 

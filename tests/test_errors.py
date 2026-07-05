@@ -83,6 +83,68 @@ def test_connection_error_is_retried_then_friendly(app_client):
 
 
 @respx.mock
+def test_malformed_apply_form_is_a_400_not_a_500(app_client):
+    token = login(app_client)
+    conversion_id = make_conversion(app_client, token)
+    # selected id with no amount_/memo_ fields (tampered or stale form)
+    response = app_client.post(f"/conversions/{conversion_id}/apply", data={
+        "selected": ["t1"], "csrf_token": token,
+    })
+    assert response.status_code == 400
+    assert "Malformed apply form" in response.text
+    # non-numeric amount
+    response = app_client.post(f"/conversions/{conversion_id}/apply", data={
+        "selected": ["t1"], "amount_t1": "abc", "memo_t1": "x", "csrf_token": token,
+    })
+    assert response.status_code == 400
+
+
+@respx.mock
+def test_apply_recheck_skips_transactions_that_became_splits(app_client):
+    # t1 was a normal transaction at preview time but is a split by apply time
+    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": [
+            {"id": "t1", "date": "2024-01-05", "amount": -1817000,
+             "payee_name": "Ramen", "memo": None, "deleted": False,
+             "subtransactions": [{"id": "s1", "amount": -1000000},
+                                 {"id": "s2", "amount": -817000}]},
+        ]}})
+    )
+    patch_route = respx.patch(f"{YNAB}/budgets/b1/transactions")
+    token = login(app_client)
+    conversion_id = make_conversion(app_client, token)
+    response = app_client.post(f"/conversions/{conversion_id}/apply", data={
+        "selected": ["t1"], "amount_t1": "-15990", "memo_t1": "x",
+        "csrf_token": token,
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("?applied=0&skipped_splits=1")
+    assert not patch_route.called
+    followed = app_client.get(response.headers["location"])
+    assert "1 skipped" in followed.text
+
+
+def test_unhandled_exception_gets_friendly_500_with_headers(app_client):
+    @app_client.app.get("/boom")
+    def boom():
+        raise RuntimeError("kaboom")
+
+    response = app_client.get("/boom")
+    assert response.status_code == 500
+    assert "Something went wrong" in response.text
+    assert "kaboom" not in response.text  # no internals leaked
+    assert response.headers["X-Frame-Options"] == "DENY"
+
+
+def test_http_exceptions_render_error_page(app_client):
+    login(app_client)
+    response = app_client.get("/conversions/nope")
+    assert response.status_code == 404
+    assert "Not found" in response.text
+    assert "Conversion not found" in response.text
+
+
+@respx.mock
 def test_rates_down_renders_friendly_page(app_client):
     respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
         return_value=Response(200, json={"data": {"transactions": [
