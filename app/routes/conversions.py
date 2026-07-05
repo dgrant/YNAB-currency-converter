@@ -5,7 +5,7 @@ from fastapi.responses import RedirectResponse
 
 from ..auth import require_login
 from ..config import get_settings
-from ..convert import build_preview
+from ..convert import build_preview, format_amount, format_original, is_converted, is_split
 from ..rates import FrankfurterClient
 from ..store import ConversionStore
 from ..templates import templates
@@ -184,7 +184,11 @@ def preview(request: Request, conversion_id: str):
     transactions = get_ynab().get_transactions(
         conversion["budget_id"], conversion["account_id"], conversion["start_date"]
     )
-    pending = [t for t in transactions if t["amount"] != 0]
+    pending = [
+        t for t in transactions if t["amount"] != 0 and not is_converted(t.get("memo"))
+    ]
+    splits = [t for t in pending if is_split(t)]
+    pending = [t for t in pending if not is_split(t)]
     rows = []
     if pending:
         dates = [date.fromisoformat(t["date"]) for t in pending]
@@ -194,10 +198,26 @@ def preview(request: Request, conversion_id: str):
         rows = build_preview(
             pending, rates, conversion["from_currency"], conversion["to_currency"]
         )
+    totals = None
+    if rows:
+        totals = {
+            "original": format_original(
+                sum(r["original_milliunits"] for r in rows), conversion["from_currency"]
+            ),
+            "converted": format_amount(
+                sum(r["new_milliunits"] for r in rows), conversion["to_currency"]
+            ),
+        }
     return templates.TemplateResponse(
         request,
         "preview.html",
-        {"conversion": conversion, "rows": rows, "total_fetched": len(transactions)},
+        {
+            "conversion": conversion,
+            "rows": rows,
+            "totals": totals,
+            "skipped_splits": len(splits),
+            "total_fetched": len(transactions),
+        },
     )
 
 

@@ -37,6 +37,10 @@ def test_full_conversion_flow(app_client):
             {"id": "t2", "date": "2024-01-05", "amount": -5000000,
              "payee_name": "Hotel", "memo": "-5,000 JPY (FX rate: 0.0087987)",
              "deleted": False},
+            {"id": "t3", "date": "2024-01-05", "amount": -3000000,
+             "payee_name": "Combini", "memo": None, "deleted": False,
+             "subtransactions": [{"id": "s1", "amount": -1000000},
+                                 {"id": "s2", "amount": -2000000}]},
         ]}})
     )
     respx.get(f"{FX}/2023-12-29..2024-01-05").mock(
@@ -59,10 +63,16 @@ def test_full_conversion_flow(app_client):
 
     preview = app_client.post(f"/conversions/{conversion_id}/preview")
     assert preview.status_code == 200
-    # t1 proposed; t2 already converted (rmillan memo) so it must not appear
+    # t1 proposed; t2 already converted (rmillan memo) so it must not appear;
+    # t3 is a split and must be skipped with a note
     assert 'value="t1"' in preview.text
     assert 'value="t2"' not in preview.text
+    assert 'value="t3"' not in preview.text
+    assert "1 split transaction skipped" in preview.text
     assert "-1,817 JPY (FX rate: 0.0087987)" in preview.text
+    # totals row for the single proposed transaction
+    assert "Total (1 row)" in preview.text
+    assert "-15.99" in preview.text
 
     applied = app_client.post(f"/conversions/{conversion_id}/apply", data={
         "selected": ["t1"],

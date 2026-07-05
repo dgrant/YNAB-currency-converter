@@ -4,9 +4,11 @@ from app.convert import (
     build_memo,
     build_preview,
     convert_milliunits,
+    format_amount,
     format_original,
     format_rate,
     is_converted,
+    is_split,
 )
 from app.rates import RateTable
 
@@ -43,6 +45,10 @@ class TestFormatting:
 
     def test_positive_amount_with_thousands(self):
         assert format_original(1234567890, "USD") == "1,234,567.89 USD"
+
+    def test_amount_without_currency_suffix(self):
+        assert format_amount(-1817000, "JPY") == "-1,817"
+        assert format_amount(-45300, "EUR") == "-45.30"
 
     def test_rate_formatting(self):
         assert format_rate(0.0087987) == "0.0087987"
@@ -81,6 +87,32 @@ class TestBuildPreview:
         assert [r["id"] for r in rows] == ["t1"]
         assert rows[0]["new_milliunits"] == -15990
         assert rows[0]["new_memo"] == "-1,817 JPY (FX rate: 0.0087987)"
+
+    def test_converted_display_uses_target_currency_decimals(self):
+        transactions = [
+            {"id": "t1", "date": "2024-01-05", "amount": -15990,
+             "payee_name": "Ramen", "memo": None},
+        ]
+        # USD -> JPY budget: zero-decimal display, no trailing ".00"
+        rows = build_preview(transactions, RateTable({"2024-01-05": 113.65}), "USD", "JPY")
+        assert rows[0]["new_display"] == "-1,817"
+        # JPY -> USD stays two-decimal
+        rows = build_preview(transactions, RateTable({"2024-01-05": 0.0087987}), "JPY", "USD")
+        assert rows[0]["new_display"] == "-0.14"
+
+    def test_skips_split_transactions(self):
+        split = {
+            "id": "t1", "date": "2024-01-05", "amount": -3000000,
+            "payee_name": "Combini", "memo": None,
+            "subtransactions": [{"id": "s1", "amount": -1000000},
+                                {"id": "s2", "amount": -2000000}],
+        }
+        plain = {"id": "t2", "date": "2024-01-05", "amount": -1817000,
+                 "payee_name": "Ramen", "memo": None, "subtransactions": []}
+        assert is_split(split)
+        assert not is_split(plain)
+        rows = build_preview([split, plain], self.make_rates(), "JPY", "USD")
+        assert [r["id"] for r in rows] == ["t2"]
 
     def test_weekend_falls_back_to_prior_business_day(self):
         transactions = [

@@ -17,16 +17,28 @@ def is_converted(memo: str | None) -> bool:
     return bool(memo and MARKER_RE.search(memo))
 
 
+def is_split(txn: dict) -> bool:
+    """YNAB split transactions: subtransactions must sum to the parent, so
+    patching the parent's amount alone would be rejected or corrupt the split.
+    Until subtransaction conversion is implemented, splits are skipped."""
+    return bool(txn.get("subtransactions"))
+
+
 def decimal_digits(currency: str) -> int:
     return 0 if currency in ZERO_DECIMAL_CURRENCIES else 2
 
 
-def format_original(milliunits: int, currency: str) -> str:
-    """Format a YNAB milliunit amount as e.g. '-1,817 JPY' or '-45.30 EUR'."""
+def format_amount(milliunits: int, currency: str) -> str:
+    """Format a YNAB milliunit amount to the currency's minor unit, e.g. '-1,817' or '-45.30'."""
     digits = decimal_digits(currency)
     quantum = Decimal(1).scaleb(-digits)
     amount = (Decimal(milliunits) / 1000).quantize(quantum, rounding=ROUND_HALF_UP)
-    return f"{amount:,} {currency}"
+    return f"{amount:,}"
+
+
+def format_original(milliunits: int, currency: str) -> str:
+    """Format a YNAB milliunit amount as e.g. '-1,817 JPY' or '-45.30 EUR'."""
+    return f"{format_amount(milliunits, currency)} {currency}"
 
 
 def format_rate(rate: float) -> str:
@@ -68,7 +80,10 @@ def build_preview(
             continue
         if txn["amount"] == 0:
             continue
+        if is_split(txn):
+            continue
         rate = rates.rate_for(date.fromisoformat(txn["date"]))
+        new_milliunits = convert_milliunits(txn["amount"], rate, to_currency)
         rows.append(
             {
                 "id": txn["id"],
@@ -79,7 +94,8 @@ def build_preview(
                 "original_display": format_original(txn["amount"], from_currency),
                 "rate": rate,
                 "rate_display": format_rate(rate),
-                "new_milliunits": convert_milliunits(txn["amount"], rate, to_currency),
+                "new_milliunits": new_milliunits,
+                "new_display": format_amount(new_milliunits, to_currency),
                 "new_memo": build_memo(txn.get("memo"), txn["amount"], from_currency, rate),
             }
         )
