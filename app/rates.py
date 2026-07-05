@@ -36,7 +36,9 @@ class FrankfurterClient:
             self._currencies = self._get("/currencies").json()
         return self._currencies
 
-    def get_rates(self, from_currency: str, to_currency: str, start: date, end: date) -> "RateTable":
+    def get_rates(
+        self, from_currency: str, to_currency: str, start: date, end: date
+    ) -> "RateTable":
         if from_currency == to_currency:
             return RateTable({}, same_currency=True)
         response = self._get(

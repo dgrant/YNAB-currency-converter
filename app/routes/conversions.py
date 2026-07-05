@@ -250,7 +250,7 @@ async def apply(request: Request, conversion_id: str):
         updates.append(
             {
                 "id": txn_id,
-                "amount": int(form[f"amount_{txn_id}"]),
+                "amount": int(str(form[f"amount_{txn_id}"])),
                 "memo": str(form[f"memo_{txn_id}"])[:500],
             }
         )

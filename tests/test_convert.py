@@ -1,4 +1,3 @@
-from datetime import date
 
 from app.convert import (
     build_memo,

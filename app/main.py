@@ -13,7 +13,9 @@ from .templates import templates
 from .ynab import YNABError
 
 
-def _error_page(request: Request, title: str, message: str, hint: str, status_code: int) -> Response:
+def _error_page(
+    request: Request, title: str, message: str, hint: str, status_code: int
+) -> Response:
     return templates.TemplateResponse(
         request,
         "error.html",

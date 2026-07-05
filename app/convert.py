@@ -10,7 +10,10 @@ from .rates import RateTable
 MARKER_RE = re.compile(r"\(FX rate: [0-9]*\.?[0-9]+\)")
 
 # ISO 4217 currencies with no minor unit (whole-number amounts).
-ZERO_DECIMAL_CURRENCIES = {"JPY", "KRW", "VND", "ISK", "CLP", "PYG", "UGX", "RWF", "GNF", "XOF", "XAF", "KMF", "DJF", "VUV", "BIF"}
+ZERO_DECIMAL_CURRENCIES = {
+    "JPY", "KRW", "VND", "ISK", "CLP", "PYG", "UGX", "RWF",
+    "GNF", "XOF", "XAF", "KMF", "DJF", "VUV", "BIF",
+}
 
 
 def is_converted(memo: str | None) -> bool:
