@@ -24,10 +24,42 @@ conversion configs; losing it never touches your YNAB data.
 
 ## Updating
 
+Auto-deploy (below) normally handles this. To update by hand:
+
 ```bash
 git pull
 docker compose up -d --build
 ```
+
+## Auto-deploy on push
+
+Merging/pushing to the default branch deploys automatically:
+
+1. GitHub Actions (`.github/workflows/ci.yml`) runs pytest on every push.
+2. A cron job on the server runs `deploy/autodeploy.sh` every 2 minutes. When
+   the default branch has new commits *and* their CI checks are green, it
+   fast-forwards and runs `docker compose up -d --build`, then health-checks
+   `/login`. Commits with failing CI are never deployed.
+
+There are no deploy secrets: the server polls GitHub over public HTTPS
+(`git fetch` + the unauthenticated check-runs API); nothing connects in.
+Worst-case latency from merge to live is ~2 minutes plus the build.
+
+One-time setup on the server:
+
+```bash
+cd ~/YNAB-currency-converter && git pull
+( crontab -l 2>/dev/null; echo '*/2 * * * * flock -n $HOME/.ynabfx-deploy.lock $HOME/YNAB-currency-converter/deploy/autodeploy.sh >> $HOME/autodeploy.log 2>&1' ) | crontab -
+```
+
+The script is silent when there's nothing to do; deploys, CI waits/failures,
+and health-check results are appended to `~/autodeploy.log`:
+
+```bash
+tail ~/autodeploy.log
+```
+
+To pause auto-deploy, comment out the line with `crontab -e`.
 
 ## Exposing it safely
 
@@ -71,10 +103,11 @@ mkdir -p ~/.ssh && echo 'ssh-ed25519 AAAA... you@laptop' >> ~/.ssh/authorized_ke
 chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys
 ```
 
-## Future: auto-deploy on push (GitHub Actions)
+## Alternative considered: push-based deploy over SSH
 
-Generate a deploy key pair, put the public half in the server's
-`~/.ssh/authorized_keys`, add the private half as a repo secret
-(`SSH_KEY`) plus `SSH_HOST`/`SSH_USER`, and add a workflow that runs
-`git pull && docker compose up -d --build` over SSH on push to master.
-Not set up yet — ask Claude to add it when wanted.
+The classic setup — a GitHub Actions job that SSHes into the server with a
+deploy key and runs `git pull && docker compose up -d --build` — would deploy
+seconds after merge instead of within ~2 minutes. It was skipped because it
+requires storing an SSH private key for the server as a secret in a public
+repo, and the poller above needs no credentials in either direction. Revisit
+if the 2-minute latency ever matters.

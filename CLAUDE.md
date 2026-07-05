@@ -63,7 +63,13 @@ servers (see `tests/` and `test_app_flow.py`).
 Docker Compose; the container binds to **127.0.0.1:8000** (not public) and is
 meant to sit behind a reverse proxy that terminates TLS. Config via `.env`
 (`APP_PASSWORD`, `SECRET_KEY`, `YNAB_TOKEN`) — see `.env.example` and
-`DEPLOY.md`. Update in place with:
+`DEPLOY.md`.
+
+**Auto-deploy:** merging/pushing to the default branch deploys itself. CI
+(`.github/workflows/ci.yml`) runs pytest; a cron job on the server runs
+`deploy/autodeploy.sh` every 2 minutes, which fast-forwards and rebuilds when
+new commits on the default branch have green checks (no secrets — the server
+polls public GitHub over HTTPS). Manual fallback:
 
 ```bash
 git pull && docker compose up -d --build
