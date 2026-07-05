@@ -8,14 +8,19 @@
 <p>{{ rows | length }} unconverted transaction{{ "s" if rows | length != 1 }}
    ({{ total_fetched }} fetched since {{ conversion.start_date }}).
    Review and untick anything you don't want converted.</p>
+{% if skipped_splits %}
+<p class="hint">{{ skipped_splits }} split transaction{{ "s" if skipped_splits != 1 }} skipped —
+   split transactions aren't supported yet; convert them manually in YNAB.</p>
+{% endif %}
 <form method="post" action="/conversions/{{ conversion.id }}/apply">
+  {{ csrf_input(request) }}
   <table>
     <thead>
       <tr>
         <th><input type="checkbox" checked onclick="document.querySelectorAll('.row-check').forEach(c => c.checked = this.checked)"></th>
         <th>Date</th>
         <th>Payee</th>
-        <th>Memo</th>
+        <th class="memo">Memo</th>
         <th class="num">Original ({{ conversion.from_currency }})</th>
         <th class="num">Rate</th>
         <th class="num">Converted ({{ conversion.to_currency }})</th>
@@ -34,10 +39,21 @@
         <td class="memo">{{ row.old_memo }}</td>
         <td class="num">{{ row.original_display }}</td>
         <td class="num">{{ row.rate_display }}</td>
-        <td class="num">{{ "%.2f" | format(row.new_milliunits / 1000) }}</td>
+        <td class="num">{{ row.new_display }}</td>
       </tr>
       {% endfor %}
     </tbody>
+    {% if totals %}
+    <tfoot>
+      <tr>
+        <td colspan="3">Total ({{ rows | length }} row{{ "s" if rows | length != 1 }})</td>
+        <td class="memo"></td>
+        <td class="num">{{ totals.original }}</td>
+        <td></td>
+        <td class="num">{{ totals.converted }}</td>
+      </tr>
+    </tfoot>
+    {% endif %}
   </table>
   <button type="submit" class="primary">Approve selected &amp; update YNAB</button>
 </form>
@@ -45,6 +61,10 @@
 <div class="card">
   <p>Nothing to convert — all {{ total_fetched }} transaction{{ "s" if total_fetched != 1 }}
      since {{ conversion.start_date }} are already converted (or the account has none).</p>
+  {% if skipped_splits %}
+  <p class="hint">{{ skipped_splits }} split transaction{{ "s" if skipped_splits != 1 }} skipped —
+     split transactions aren't supported yet; convert them manually in YNAB.</p>
+  {% endif %}
 </div>
 {% endif %}
 {% endblock %}

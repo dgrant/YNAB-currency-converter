@@ -1,8 +1,12 @@
 import httpx
 
+from .http import get_or_error
+
 
 class YNABError(Exception):
-    pass
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class YNABClient:
@@ -16,18 +20,27 @@ class YNABClient:
         )
 
     def _get(self, path: str, params: dict | None = None) -> dict:
-        response = self._client.get(path, params=params)
+        response = get_or_error(self._client, path, params, YNABError, "YNAB")
         self._raise_for_status(response)
         return response.json()["data"]
 
     def _raise_for_status(self, response: httpx.Response) -> None:
         if response.is_success:
             return
+        if response.status_code == 429:
+            raise YNABError(
+                "YNAB is rate limiting this token (the API allows about 200 "
+                "requests per hour).",
+                status_code=429,
+            )
         try:
             detail = response.json()["error"]["detail"]
         except Exception:
             detail = response.text
-        raise YNABError(f"YNAB API error {response.status_code}: {detail}")
+        raise YNABError(
+            f"YNAB API error {response.status_code}: {detail}",
+            status_code=response.status_code,
+        )
 
     def get_budgets(self) -> list[dict]:
         return self._get("/budgets")["budgets"]
@@ -44,9 +57,13 @@ class YNABClient:
         return [t for t in data["transactions"] if not t["deleted"]]
 
     def update_transactions(self, budget_id: str, transactions: list[dict]) -> list[dict]:
-        response = self._client.patch(
-            f"/budgets/{budget_id}/transactions",
-            json={"transactions": transactions},
-        )
+        # PATCH is not idempotent, so no retry here — only friendly wrapping.
+        try:
+            response = self._client.patch(
+                f"/budgets/{budget_id}/transactions",
+                json={"transactions": transactions},
+            )
+        except httpx.TransportError as exc:
+            raise YNABError(f"Could not reach YNAB: {exc}") from exc
         self._raise_for_status(response)
         return response.json()["data"]["transactions"]

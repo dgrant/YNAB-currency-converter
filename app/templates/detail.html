@@ -4,6 +4,13 @@
   <h1>{{ conversion.account_name }}</h1>
   <a href="/conversions">← All conversions</a>
 </div>
+{% if applied is not none %}
+<div class="flash">
+  {{ applied }} transaction{{ "s" if applied != 1 }} updated in YNAB.
+  {% if skipped_splits %}{{ skipped_splits }} skipped — became split transaction{{ "s" if skipped_splits != 1 }} since the preview.{% endif %}
+  Preview again to check for anything new.
+</div>
+{% endif %}
 <div class="card">
   <dl>
     <dt>Budget</dt><dd>{{ conversion.budget_name }}</dd>
@@ -11,6 +18,7 @@
     <dt>Start date</dt><dd>{{ conversion.start_date }}</dd>
   </dl>
   <form method="post" action="/conversions/{{ conversion.id }}/preview">
+    {{ csrf_input(request) }}
     <button type="submit" class="primary">Preview sync</button>
   </form>
   <p class="hint">Preview fetches this account's transactions from YNAB (since the
@@ -21,6 +29,7 @@
   <a class="button" href="/conversions/{{ conversion.id }}/edit">Edit</a>
   <form method="post" action="/conversions/{{ conversion.id }}/delete"
         onsubmit="return confirm('Delete this conversion? (YNAB data is not touched.)')">
+    {{ csrf_input(request) }}
     <button type="submit" class="link danger">Delete</button>
   </form>
 </div>

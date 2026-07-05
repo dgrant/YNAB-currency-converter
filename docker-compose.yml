@@ -1,6 +1,12 @@
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        # Baked into the image and reported by /healthz and the page footer.
+        # deploy/autodeploy.sh exports this before building; local builds
+        # fall back to "dev".
+        GIT_SHA: "${GIT_SHA:-dev}"
     ports:
       # Bound to localhost so the app isn't exposed publicly over plain HTTP;
       # reach it via SSH tunnel or put Caddy/nginx in front (see DEPLOY.md).
@@ -9,3 +15,8 @@ services:
     volumes:
       - ./data:/srv/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      start_period: 15s

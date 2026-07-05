@@ -19,6 +19,9 @@ class Settings:
         self.frankfurter_api_base = os.environ.get(
             "FRANKFURTER_API_BASE", "https://api.frankfurter.dev/v1"
         )
+        # Git SHA baked into the image at build time (Dockerfile ARG GIT_SHA);
+        # "dev" when running outside the built image.
+        self.app_version = os.environ.get("APP_VERSION", "dev")
 
 
 _settings: Settings | None = None

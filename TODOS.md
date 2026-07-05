@@ -95,75 +95,57 @@ not break (memo marker format, milliunit math, preview→approve contract).
 - [x] **One conversion per account.** Done: the new/edit forms disable
       accounts that already have a conversion, and create/edit reject
       duplicates server-side with a 409.
-- [ ] **Handle split transactions.** `build_preview` converts any transaction
-      by its top-level `amount`, but a YNAB split's subtransactions must sum
-      to the parent. Patching a split parent's amount will be rejected or
-      leave the split inconsistent. At minimum detect
-      `subtransactions`/category `Split` and skip with a note in the preview;
-      properly, convert each subtransaction with the same rate and rounding
-      such that they still sum to the converted parent.
-- [ ] **Friendly error pages.** `YNABError` and `RatesError` currently
-      surface as raw 500s. Catch them in the routes (or an exception handler)
-      and render a message with a retry link — most likely failures are YNAB
-      down, token revoked, or Frankfurter down.
-- [ ] **Handle YNAB rate limiting (429).** The API allows ~200 requests/hour
-      per token. Rare today, but the scheduler and pending-count badges will
-      hit it. Respect 429s with a clear message; consider YNAB delta requests
-      (`last_knowledge_of_server`) to cut request volume.
-- [ ] **Zero-decimal display bug in preview.** `preview.html` renders the
-      converted amount with a hardcoded `%.2f`. Correct for 2-decimal budget
-      currencies, wrong if the *budget* currency is zero-decimal (e.g. a JPY
-      budget shows `¥1817.00`). Format via `decimal_digits(to_currency)` like
-      `format_original` does. The stored milliunits are already correct —
-      display-only.
-- [ ] **Validate currency direction on create.** Nothing checks that
-      `to_currency` matches the budget's currency (it's just a form field the
-      user could mismatch). Fetch the budget's `iso_code` server-side on
-      create instead of trusting the form.
-- [ ] **Retries/backoff on outbound calls.** Both httpx clients have a 30s
-      timeout but no retry; a transient Frankfurter blip fails the whole
-      preview. One retry with backoff on idempotent GETs is enough.
+- [ ] **Convert split transactions properly.** The dangerous half is fixed:
+      splits (non-empty `subtransactions`) are now detected, skipped in
+      `build_preview`, and counted with a note in the preview, so apply can
+      no longer corrupt them. Remaining feature work: convert each
+      subtransaction with the same rate, rounding such that they still sum
+      to the converted parent, then PATCH parent + subtransactions together.
+- [x] **Friendly error pages.** Done: exception handlers in `main.py` render
+      `error.html` (502) for `YNABError`/`RatesError`, including connection
+      failures, with a hint and retry/back links.
+- [x] **Handle YNAB rate limiting (429).** Done: 429s render their own page
+      explaining the ~200 req/hour budget. Still worth adding YNAB delta
+      requests (`last_knowledge_of_server`) to cut request volume when the
+      scheduler / pending-count badges land.
+- [x] **Zero-decimal display bug in preview.** Done: the converted column
+      formats via `format_amount(new_milliunits, to_currency)`.
+- [x] **Validate currency direction on create.** Done: create and edit fetch
+      the budget's `iso_code` from YNAB and reject mismatches with a 400.
+- [x] **Retries/backoff on outbound calls.** Done: `app/http.py`
+      `get_with_retry` — one retry after 0.5s on connection errors and
+      502/503/504, GETs only (the YNAB PATCH is never retried).
 
 ## Security
 
-- [ ] **CSRF tokens on POST forms.** Session-cookie auth plus plain HTML
-      forms means a malicious page could forge a POST (worst case: an
-      unwanted apply — it can only write amounts/memos the attacker guesses,
-      but still). Add a per-session token to all forms, or set the session
-      cookie `SameSite=Strict` (check what `SessionMiddleware` sets today).
-- [ ] **Login rate limiting.** `secrets.compare_digest` is already used, but
-      there's no brute-force throttle on `/login`. A dumb in-memory counter
-      with exponential delay is fine for single-user.
-- [ ] **Security headers.** Add `X-Frame-Options`/CSP basics via middleware
-      or the nginx vhost.
-- [ ] **Run the container as non-root.** Dockerfile currently runs uvicorn as
-      root; add a `USER` after installing deps (mind `data/` volume
-      ownership).
+- [x] **CSRF tokens on POST forms.** Done: per-session token via
+      `csrf_input()` in every form + `verify_csrf` router dependency (403 on
+      mismatch). Session cookie stays `SameSite=Lax` as a second layer.
+- [x] **Login rate limiting.** Done: in-memory counter in `auth.py`; after 5
+      consecutive failures each further failure doubles the lockout (cap
+      5 min), 429 with a countdown message meanwhile.
+- [x] **Security headers.** Done: middleware sets X-Frame-Options,
+      X-Content-Type-Options, Referrer-Policy, and a CSP (inline scripts
+      allowed — the templates use small inline scripts, no external assets).
+- [x] **Run the container as non-root.** Done: uvicorn runs as uid 1000
+      (matches the first user on a stock Debian host so the bind-mounted
+      `./data` stays writable; DEPLOY.md documents the `chown` fallback).
 
 ## UX
 
-- [ ] **Public landing / home page.** Today `/` redirects straight to
-      `/conversions` (behind login), so an unauthenticated visitor only ever
-      sees the bare login form. Make `/` a nice public page that pitches the
-      app — what it does (enter YNAB transactions in their original foreign
-      currency, get them converted with date-accurate ECB rates), a
-      screenshot of the preview table, how it works in three steps
-      (create conversion → preview → approve), and a "nothing is written to
-      YNAB without your approval / no data stored" privacy angle — with a
-      log-in button in the corner. rmillan.com's front page is the
-      reference for tone. Low stakes while single-user, but it's the front
-      door if multi-user sign-up ever opens, and it makes the URL shareable
-      in the meantime. Server-rendered like everything else; no JS framework
-      needed.
-- [ ] **Mobile-friendly styling.** Primary usage is from a phone. The preview
-      table (7 columns) needs a responsive treatment — collapse to cards or
-      hide the memo column on small screens.
-- [ ] **Totals row in preview.** Sum of original and converted amounts, so a
-      batch approval can be sanity-checked at a glance.
-- [ ] **Post-apply flash instead of a bare page.** `applied.html` is a dead
-      end; redirect back to the detail page with a "N updated" flash message,
-      and offer "preview again".
-- [ ] **Dark mode** (`prefers-color-scheme` in `style.css`).
+- [x] **Public landing / home page.** Done: `/` now renders `landing.html`
+      (pitch, three steps, privacy note, log-in button) for anonymous
+      visitors and redirects straight to `/conversions` when logged in.
+      No screenshot yet — add one if the page ever needs selling power.
+- [x] **Mobile-friendly styling.** First pass done: below 700px the memo
+      column is hidden, padding/font shrink, tables scroll horizontally, and
+      the landing steps stack. Revisit a card layout only if that isn't
+      comfortable enough in practice.
+- [x] **Totals row in preview.** Done: table footer with both sums (covers
+      all listed rows; unticking doesn't recompute — it's a sanity check).
+- [x] **Post-apply flash instead of a bare page.** Done: apply redirects to
+      the detail page with `?applied=N` and a flash; `applied.html` removed.
+- [x] **Dark mode.** Done (`prefers-color-scheme` variables in `style.css`).
 
 ## Ops / deployment
 
@@ -180,9 +162,7 @@ not break (memo marker format, milliunit math, preview→approve contract).
       trigger the deploy script, nothing else; keep the cron poller as
       fallback or remove it to avoid double deploys. Note the sandbox
       caveat: agents can't SSH to the server, so setting up the key/secret
-      is guided-manual with David. Unauthenticated, no side effects, returns 200
-      + version/SHA. Point `deploy/autodeploy.sh`'s health check and a
-      `docker compose` `healthcheck:` at it instead of `/login`.
+      is guided-manual with David.
 - [ ] **Deploy failure notifications.** Autodeploy failures only land in
       `~/autodeploy.log` on the server. Have the script ping ntfy.sh/email on
       failed deploy or failed health check.
@@ -191,24 +171,27 @@ not break (memo marker format, milliunit math, preview→approve contract).
 - [ ] **Back up `data/conversions.json` off-site.** It's tiny, recreatable by
       hand, but a one-line cron append to a private gist / rclone target
       removes the "recreate from memory" step after a disk loss.
-- [ ] **Dependency updates.** Enable Dependabot (pip + GitHub Actions) so the
-      pinned requirements don't rot; CI green = auto-deployable.
-- [ ] **Expose the running version.** Bake the git SHA into the image at
-      build time and show it in the footer / `/healthz`, so "what's live" is
-      checkable without SSH.
+- [x] **Dependency updates.** Done: `.github/dependabot.yml` (pip + GitHub
+      Actions, weekly); CI green = auto-deployable.
+- [x] **Expose the running version.** Done: `GET /healthz` (unauthenticated)
+      returns `{status, version}` with the git SHA baked in at build time
+      (Dockerfile `ARG GIT_SHA`, exported by `autodeploy.sh`); the page
+      footer shows it too, and autodeploy verifies the live version matches
+      the deployed SHA. The compose file gained a `healthcheck:` on it.
 
 ## Code health / CI
 
-- [ ] **Add lint + type-check to CI.** `ruff check` + `ruff format --check`
-      and mypy alongside pytest in `.github/workflows/ci.yml` (CI gates
-      deploys, so this directly protects prod).
-- [ ] **Test coverage for the gaps above** as they're fixed: split
-      transactions, YNAB/Frankfurter error paths, 429 handling,
-      zero-decimal budget display.
-- [ ] **Async or pooled HTTP clients.** Routes are sync `def` (fine —
-      FastAPI threadpools them), but `YNABClient` is constructed per request
-      while `FrankfurterClient` is a cached global — pick one lifecycle.
-      Revisit when the scheduler lands, since it will share these clients.
+- [x] **Add lint + type-check to CI.** Done: `ruff check` (E/F/W/I/UP/B,
+      line length 100) + `mypy` before pytest. `ruff format --check` was
+      considered and skipped — it fights the compact literal style (test
+      fixtures especially) for no correctness benefit.
+- [x] **Test coverage for the gaps above.** Done for everything fixed so
+      far: split skipping, YNAB/Frankfurter error paths, retries, 429,
+      zero-decimal display, CSRF, throttling (`tests/test_errors.py` and
+      additions to the flow/convert tests).
+- [x] **Async or pooled HTTP clients.** Done (the "pick one lifecycle"
+      half): both clients are now cached process-wide singletons with pooled
+      connections. Going async remains a scheduler-time decision.
 
 ## Notes from investigating ynab.rmillan.com (2026-07-05)
 

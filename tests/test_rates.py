@@ -45,5 +45,7 @@ def test_missing_rate_raises():
 @respx.mock
 def test_api_error_raises():
     respx.get(f"{BASE}/2023-12-25..2024-01-02").mock(return_value=Response(404, text="not found"))
-    with pytest.raises(RatesError):
+    with pytest.raises(RatesError) as excinfo:
         FrankfurterClient(BASE).get_rates("JPY", "XXX", date(2024, 1, 1), date(2024, 1, 2))
+    # the error names the currency pair, so the failing conversion is identifiable
+    assert "JPY->XXX" in str(excinfo.value)

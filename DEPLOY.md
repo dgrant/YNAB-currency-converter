@@ -22,6 +22,12 @@ from the internet until you set up one of the access options below). `data/conve
 state) lives in `./data` on the host — back it up if you care about your
 conversion configs; losing it never touches your YNAB data.
 
+The app process runs as an unprivileged user (uid 1000), not root. The
+container entrypoint starts as root just long enough to `chown` the
+bind-mounted `./data` directory (Docker creates missing host dirs root-owned,
+and older deployments have root-owned files from when the app ran as root),
+then drops privileges — no manual chown needed on the host.
+
 ## Updating
 
 Auto-deploy (below) normally handles this. To update by hand:

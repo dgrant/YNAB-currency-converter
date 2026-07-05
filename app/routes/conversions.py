@@ -5,7 +5,7 @@ from fastapi.responses import RedirectResponse
 
 from ..auth import require_login
 from ..config import get_settings
-from ..convert import build_preview
+from ..convert import build_preview, format_amount, format_original, is_converted, is_split
 from ..rates import FrankfurterClient
 from ..store import ConversionStore
 from ..templates import templates
@@ -13,7 +13,10 @@ from ..ynab import YNABClient
 
 router = APIRouter(dependencies=[Depends(require_login)])
 
+# Both HTTP clients are process-wide singletons so connections are pooled
+# across requests (tests reset them; see conftest.py).
 _rates_client: FrankfurterClient | None = None
+_ynab_client: YNABClient | None = None
 
 
 def get_store() -> ConversionStore:
@@ -21,10 +24,13 @@ def get_store() -> ConversionStore:
 
 
 def get_ynab() -> YNABClient:
-    settings = get_settings()
-    if not settings.ynab_token:
-        raise HTTPException(500, "YNAB_TOKEN is not configured")
-    return YNABClient(settings.ynab_token, settings.ynab_api_base)
+    global _ynab_client
+    if _ynab_client is None:
+        settings = get_settings()
+        if not settings.ynab_token:
+            raise HTTPException(500, "YNAB_TOKEN is not configured")
+        _ynab_client = YNABClient(settings.ynab_token, settings.ynab_api_base)
+    return _ynab_client
 
 
 def get_rates_client() -> FrankfurterClient:
@@ -32,11 +38,6 @@ def get_rates_client() -> FrankfurterClient:
     if _rates_client is None:
         _rates_client = FrankfurterClient(get_settings().frankfurter_api_base)
     return _rates_client
-
-
-@router.get("/")
-def home():
-    return RedirectResponse("/conversions", status_code=303)
 
 
 @router.get("/conversions")
@@ -80,6 +81,21 @@ def _reject_duplicate_account(account_id: str, except_conversion_id: str | None 
         raise HTTPException(409, "That account already has a conversion configured")
 
 
+def _validate_to_currency(budget_id: str, to_currency: str) -> None:
+    """The 'to' currency must be the budget's own currency — check YNAB rather
+    than trusting the form field."""
+    budget = next((b for b in get_ynab().get_budgets() if b["id"] == budget_id), None)
+    if budget is None:
+        raise HTTPException(400, "Unknown budget")
+    budget_currency = (budget.get("currency_format") or {}).get("iso_code", "")
+    if budget_currency and to_currency != budget_currency:
+        raise HTTPException(
+            400,
+            f"Budget '{budget['name']}' uses {budget_currency}; transactions must be "
+            f"converted to {budget_currency}, not {to_currency}",
+        )
+
+
 @router.get("/conversions/new")
 def new_form(request: Request):
     return templates.TemplateResponse(
@@ -101,6 +117,7 @@ def create(
 ):
     date.fromisoformat(start_date)
     _reject_duplicate_account(account_id)
+    _validate_to_currency(budget_id, to_currency.upper())
     conversion = get_store().add(
         {
             "budget_id": budget_id,
@@ -123,9 +140,18 @@ def _get_conversion_or_404(conversion_id: str) -> dict:
 
 
 @router.get("/conversions/{conversion_id}")
-def detail(request: Request, conversion_id: str):
+def detail(
+    request: Request,
+    conversion_id: str,
+    applied: int | None = None,
+    skipped_splits: int = 0,
+):
     conversion = _get_conversion_or_404(conversion_id)
-    return templates.TemplateResponse(request, "detail.html", {"conversion": conversion})
+    return templates.TemplateResponse(
+        request,
+        "detail.html",
+        {"conversion": conversion, "applied": applied, "skipped_splits": skipped_splits},
+    )
 
 
 @router.get("/conversions/{conversion_id}/edit")
@@ -155,6 +181,7 @@ def edit(
 ):
     date.fromisoformat(start_date)
     _reject_duplicate_account(account_id, except_conversion_id=conversion_id)
+    _validate_to_currency(budget_id, to_currency.upper())
     updated = get_store().update(
         conversion_id,
         {
@@ -184,7 +211,14 @@ def preview(request: Request, conversion_id: str):
     transactions = get_ynab().get_transactions(
         conversion["budget_id"], conversion["account_id"], conversion["start_date"]
     )
-    pending = [t for t in transactions if t["amount"] != 0]
+    pending, skipped_splits = [], 0
+    for txn in transactions:
+        if txn["amount"] == 0 or is_converted(txn.get("memo")):
+            continue
+        if is_split(txn):
+            skipped_splits += 1
+        else:
+            pending.append(txn)
     rows = []
     if pending:
         dates = [date.fromisoformat(t["date"]) for t in pending]
@@ -194,10 +228,26 @@ def preview(request: Request, conversion_id: str):
         rows = build_preview(
             pending, rates, conversion["from_currency"], conversion["to_currency"]
         )
+    totals = None
+    if rows:
+        totals = {
+            "original": format_original(
+                sum(r["original_milliunits"] for r in rows), conversion["from_currency"]
+            ),
+            "converted": format_amount(
+                sum(r["new_milliunits"] for r in rows), conversion["to_currency"]
+            ),
+        }
     return templates.TemplateResponse(
         request,
         "preview.html",
-        {"conversion": conversion, "rows": rows, "total_fetched": len(transactions)},
+        {
+            "conversion": conversion,
+            "rows": rows,
+            "totals": totals,
+            "skipped_splits": skipped_splits,
+            "total_fetched": len(transactions),
+        },
     )
 
 
@@ -205,20 +255,38 @@ def preview(request: Request, conversion_id: str):
 async def apply(request: Request, conversion_id: str):
     conversion = _get_conversion_or_404(conversion_id)
     form = await request.form()
-    updates = []
-    for txn_id in form.getlist("selected"):
-        updates.append(
+    try:
+        updates = [
             {
                 "id": txn_id,
-                "amount": int(form[f"amount_{txn_id}"]),
+                "amount": int(str(form[f"amount_{txn_id}"])),
                 "memo": str(form[f"memo_{txn_id}"])[:500],
             }
-        )
-    updated = []
+            for txn_id in form.getlist("selected")
+        ]
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(
+            400, "Malformed apply form — go back and run the preview again"
+        ) from exc
+    updated, skipped_splits = [], 0
     if updates:
-        updated = get_ynab().update_transactions(conversion["budget_id"], updates)
-    return templates.TemplateResponse(
-        request,
-        "applied.html",
-        {"conversion": conversion, "count": len(updated)},
+        # Re-check split status at write time: a transaction may have become a
+        # split between preview render and approval, and patching a split
+        # parent's amount would corrupt or be rejected by YNAB.
+        ynab = get_ynab()
+        current = ynab.get_transactions(
+            conversion["budget_id"], conversion["account_id"], conversion["start_date"]
+        )
+        # Only patch transactions that still exist and are not splits. A txn
+        # deleted in YNAB between preview and approval would otherwise make the
+        # whole bulk PATCH fail, applying nothing.
+        present_ids = {t["id"] for t in current}
+        split_ids = {t["id"] for t in current if is_split(t)}
+        safe = [u for u in updates if u["id"] in present_ids and u["id"] not in split_ids]
+        skipped_splits = sum(1 for u in updates if u["id"] in split_ids)
+        if safe:
+            updated = ynab.update_transactions(conversion["budget_id"], safe)
+    suffix = f"&skipped_splits={skipped_splits}" if skipped_splits else ""
+    return RedirectResponse(
+        f"/conversions/{conversion_id}?applied={len(updated)}{suffix}", status_code=303
     )

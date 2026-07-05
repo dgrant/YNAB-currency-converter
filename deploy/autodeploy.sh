@@ -50,15 +50,25 @@ else:
 
   echo "$(date -Is) deploying $deployed_sha -> $remote_sha"
   git merge --ff-only "origin/$branch"
-  docker compose up -d --build
+  GIT_SHA="$remote_sha" docker compose up -d --build
   echo "$remote_sha" >"$stamp"
 
-  sleep 5
-  if curl -fsS -o /dev/null http://127.0.0.1:8000/login; then
-    echo "$(date -Is) deployed $remote_sha, health check OK"
-  else
-    echo "$(date -Is) deployed $remote_sha, WARNING: health check FAILED"
-  fi
+  # Poll /healthz for up to ~30s: a fresh build may not be serving in 5s
+  # (compose start_period is 15s), and a bare single probe misreports FAILED.
+  # Capture the body rather than piping into grep -q: under pipefail, grep -q
+  # exiting early can SIGPIPE curl and misreport a matching version.
+  local health=""
+  local i
+  for i in 1 2 3 4 5 6; do
+    sleep 5
+    health=$(curl -fsS --max-time 10 http://127.0.0.1:8000/healthz || true)
+    [ -n "$health" ] && break
+  done
+  case "$health" in
+    *"$remote_sha"*) echo "$(date -Is) deployed $remote_sha, health check OK (version matches)" ;;
+    "") echo "$(date -Is) deployed $remote_sha, WARNING: health check FAILED" ;;
+    *) echo "$(date -Is) deployed $remote_sha, WARNING: healthy but version mismatch" ;;
+  esac
 }
 
 main "$@"

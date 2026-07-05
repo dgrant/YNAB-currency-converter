@@ -25,6 +25,7 @@
       <td>
         <form method="post" action="/conversions/{{ c.id }}/delete"
               onsubmit="return confirm('Delete this conversion? (YNAB data is not touched.)')">
+          {{ csrf_input(request) }}
           <button type="submit" class="link danger">Delete</button>
         </form>
       </td>

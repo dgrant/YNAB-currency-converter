@@ -45,12 +45,24 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
   move afterward.
 - **Auth** — one `APP_PASSWORD` behind a session cookie; all of `auth.py` is the
   intended swap point for Google Sign-In later (keep the `authed` session key).
+  `/login` is brute-force throttled (in-memory, module state in `auth.py`).
+- **CSRF** — every POST form must include `{{ csrf_input(request) }}`
+  (template global in `templates.py`); `verify_csrf` is a dependency on both
+  routers and 403s POSTs without the session's token. Remember this when
+  adding any new form or POST route (tests fetch the token from the login
+  page — see `get_csrf` in `test_app_flow.py`).
+- **Split transactions are skipped** — `is_split()` in `convert.py`; never
+  let apply patch a split parent's top-level amount.
+- **Upstream errors** — raise `YNABError`/`RatesError`; exception handlers in
+  `main.py` render `error.html` (429 gets its own copy). Idempotent GETs go
+  through `app/http.py: get_with_retry`; the PATCH is never retried.
 
 ## Dev
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/pytest
+.venv/bin/ruff check . && .venv/bin/mypy   # CI runs these too — keep them green
 # run locally (needs the env vars):
 APP_PASSWORD=x SECRET_KEY=y YNAB_TOKEN=... .venv/bin/uvicorn app.main:app --port 8000
 ```
@@ -61,8 +73,10 @@ servers (see `tests/` and `test_app_flow.py`).
 ## Deploy
 
 Live at **https://ynabfx.davidgrant.ca**. Verify from outside with
-`curl -s -o /dev/null -w "%{http_code}" https://ynabfx.davidgrant.ca/login`
-→ 200 (plain GET — agent sandbox proxies 405 HEAD requests).
+`curl -s https://ynabfx.davidgrant.ca/healthz` → `{"status":"ok","version":"<git sha>"}`
+(plain GET — agent sandbox proxies 405 HEAD requests). The version is baked
+in at image build time (`ARG GIT_SHA`, exported by `autodeploy.sh`), so this
+answers "what's live" without SSH; the page footer shows it too.
 
 Docker Compose; the container binds to **127.0.0.1:8000** (not public).
 Server: David's Linode (Debian 12), app at `~/YNAB-currency-converter`,
@@ -78,7 +92,8 @@ deploy process. CI (`.github/workflows/ci.yml`) runs pytest; a cron job in
 user david's crontab (every 2 min, flock-guarded) runs `deploy/autodeploy.sh`,
 which fast-forwards and rebuilds only when new default-branch commits have
 green checks (no secrets — the server polls public GitHub over HTTPS), then
-health-checks `/login`. Latency ~2 min + build. Logs: `~/autodeploy.log`;
+health-checks `/healthz` and verifies the reported version matches the
+deployed SHA. Latency ~2 min + build. Logs: `~/autodeploy.log`;
 last deployed SHA: `~/YNAB-currency-converter/.last-deployed`. Pause by
 commenting out the crontab line. Manual fallback only:
 `git pull && docker compose up -d --build`.
@@ -94,3 +109,27 @@ keep commands short and output minimal.
 See `TODOS.md` — the maintained backlog (features, known bugs like split
 transactions, ops). Bigger arcs: multi-user, Google Sign-In, auto-sync
 scheduler, crypto, YNAB OAuth (currently a personal access token).
+
+## gstack (REQUIRED — global install)
+
+**Before doing ANY work, verify gstack is installed:**
+
+```bash
+test -d ~/.claude/skills/gstack/bin && echo "GSTACK_OK" || echo "GSTACK_MISSING"
+```
+
+If GSTACK_MISSING: STOP. Do not proceed. Tell the user:
+
+> gstack is required for all AI-assisted work in this repo.
+> Install it:
+> ```bash
+> git clone --depth 1 https://github.com/garrytan/gstack.git ~/.claude/skills/gstack
+> cd ~/.claude/skills/gstack && ./setup --team
+> ```
+> Then restart your AI coding tool.
+
+Do not skip skills, ignore gstack errors, or work around missing gstack.
+
+Using gstack skills: After install, skills like /qa, /ship, /review, /investigate,
+and /browse are available. Use /browse for all web browsing.
+Use ~/.claude/skills/gstack/... for gstack file paths (the global path).

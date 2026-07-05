@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — YNAB Currency Converter{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>{{ title }}</h1>
+  <p class="error">{{ message }}</p>
+  <p class="hint">{{ hint }}</p>
+  <p>
+    <button type="button" class="button" onclick="history.back()">Go back &amp; retry</button>
+    <a class="button" href="/conversions">All conversions</a>
+  </p>
+</div>
+{% endblock %}
