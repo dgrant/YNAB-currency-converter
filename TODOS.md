@@ -1,0 +1,138 @@
+# TODOs / future ideas
+
+Roughly ordered by value within each section. v1 is live and works; nothing
+here is required for day-to-day use. See CLAUDE.md for conventions that must
+not break (memo marker format, milliunit math, preview→approve contract).
+
+## Features
+
+- [ ] **Daily auto-sync scheduler.** A background job (in-process
+      `asyncio` task or a second container on cron) that runs preview for
+      every conversion and either auto-applies or just records what's
+      pending. Needs: YNAB error/429 handling first, and a decision on
+      auto-apply vs. notify-only (start with notify-only — the preview→approve
+      contract is a safety feature).
+- [ ] **Notifications for pending conversions.** Pairs with the scheduler:
+      when unconverted transactions appear, send an email / ntfy.sh / Telegram
+      ping with the count and a link. Makes the app pull-free: enter
+      transactions on the phone, get pinged, tap approve.
+- [ ] **Undo / revert a conversion.** The memo marker contains everything
+      needed to reverse an apply: original amount and rate. Parse
+      `-1,817 JPY (FX rate: 0.0087987)` back out, restore the original
+      milliunits, strip the marker from the memo. Per-transaction and
+      whole-batch undo on the applied page.
+- [ ] **Edit a conversion.** There's create and delete but no edit
+      (`app/routes/conversions.py`). Most useful field: `start_date`.
+- [ ] **Auto-advance `start_date` after apply.** Every preview refetches all
+      transactions since the original start date and re-skips converted ones.
+      After a successful apply, bump the stored `start_date` to the oldest
+      still-unconverted date (or keep a `last_synced` field) to keep fetches
+      small as history grows.
+- [ ] **Show pending counts on the index page.** The conversions list is
+      static config; a "N unconverted" badge per row (fetched on demand or by
+      the scheduler) turns it into a dashboard.
+- [ ] **Manual rate override in preview.** Editable rate per row (recompute
+      amount client-side or on re-preview) for cash exchanged at a
+      non-market rate, card FX fees, etc.
+- [ ] **Google Sign-In.** `app/auth.py` is the designed swap point: replace
+      the password routes with an OIDC flow that sets the same `authed`
+      session key for allowlisted emails; `require_login` stays as-is.
+- [ ] **YNAB OAuth** instead of a personal access token. Prerequisite for
+      multi-user; also removes the long-lived token from `.env`.
+- [ ] **Multi-user.** Per-user YNAB credentials and conversion lists. This is
+      the point where `data/conversions.json` should become SQLite — don't
+      add a database before this.
+- [ ] **Crypto / non-ECB currencies.** Frankfurter is ~30 fiat currencies
+      (ECB data). Add a second rate source behind the `RateTable` interface
+      (e.g. CoinGecko for crypto) and pick per conversion.
+
+## Correctness & robustness
+
+- [ ] **Handle split transactions.** `build_preview` converts any transaction
+      by its top-level `amount`, but a YNAB split's subtransactions must sum
+      to the parent. Patching a split parent's amount will be rejected or
+      leave the split inconsistent. At minimum detect
+      `subtransactions`/category `Split` and skip with a note in the preview;
+      properly, convert each subtransaction with the same rate and rounding
+      such that they still sum to the converted parent.
+- [ ] **Friendly error pages.** `YNABError` and `RatesError` currently
+      surface as raw 500s. Catch them in the routes (or an exception handler)
+      and render a message with a retry link — most likely failures are YNAB
+      down, token revoked, or Frankfurter down.
+- [ ] **Handle YNAB rate limiting (429).** The API allows ~200 requests/hour
+      per token. Rare today, but the scheduler and pending-count badges will
+      hit it. Respect 429s with a clear message; consider YNAB delta requests
+      (`last_knowledge_of_server`) to cut request volume.
+- [ ] **Zero-decimal display bug in preview.** `preview.html` renders the
+      converted amount with a hardcoded `%.2f`. Correct for 2-decimal budget
+      currencies, wrong if the *budget* currency is zero-decimal (e.g. a JPY
+      budget shows `¥1817.00`). Format via `decimal_digits(to_currency)` like
+      `format_original` does. The stored milliunits are already correct —
+      display-only.
+- [ ] **Validate currency direction on create.** Nothing checks that
+      `to_currency` matches the budget's currency (it's just a form field the
+      user could mismatch). Fetch the budget's `iso_code` server-side on
+      create instead of trusting the form.
+- [ ] **Retries/backoff on outbound calls.** Both httpx clients have a 30s
+      timeout but no retry; a transient Frankfurter blip fails the whole
+      preview. One retry with backoff on idempotent GETs is enough.
+
+## Security
+
+- [ ] **CSRF tokens on POST forms.** Session-cookie auth plus plain HTML
+      forms means a malicious page could forge a POST (worst case: an
+      unwanted apply — it can only write amounts/memos the attacker guesses,
+      but still). Add a per-session token to all forms, or set the session
+      cookie `SameSite=Strict` (check what `SessionMiddleware` sets today).
+- [ ] **Login rate limiting.** `secrets.compare_digest` is already used, but
+      there's no brute-force throttle on `/login`. A dumb in-memory counter
+      with exponential delay is fine for single-user.
+- [ ] **Security headers.** Add `X-Frame-Options`/CSP basics via middleware
+      or the nginx vhost.
+- [ ] **Run the container as non-root.** Dockerfile currently runs uvicorn as
+      root; add a `USER` after installing deps (mind `data/` volume
+      ownership).
+
+## UX
+
+- [ ] **Mobile-friendly styling.** Primary usage is from a phone. The preview
+      table (7 columns) needs a responsive treatment — collapse to cards or
+      hide the memo column on small screens.
+- [ ] **Totals row in preview.** Sum of original and converted amounts, so a
+      batch approval can be sanity-checked at a glance.
+- [ ] **Post-apply flash instead of a bare page.** `applied.html` is a dead
+      end; redirect back to the detail page with a "N updated" flash message,
+      and offer "preview again".
+- [ ] **Dark mode** (`prefers-color-scheme` in `style.css`).
+
+## Ops / deployment
+
+- [ ] **`/healthz` endpoint.** Unauthenticated, no side effects, returns 200
+      + version/SHA. Point `deploy/autodeploy.sh`'s health check and a
+      `docker compose` `healthcheck:` at it instead of `/login`.
+- [ ] **Deploy failure notifications.** Autodeploy failures only land in
+      `~/autodeploy.log` on the server. Have the script ping ntfy.sh/email on
+      failed deploy or failed health check.
+- [ ] **Uptime monitoring.** A free external monitor (UptimeRobot etc.)
+      hitting `/healthz` — currently nothing notices if the site is down.
+- [ ] **Back up `data/conversions.json` off-site.** It's tiny, recreatable by
+      hand, but a one-line cron append to a private gist / rclone target
+      removes the "recreate from memory" step after a disk loss.
+- [ ] **Dependency updates.** Enable Dependabot (pip + GitHub Actions) so the
+      pinned requirements don't rot; CI green = auto-deployable.
+- [ ] **Expose the running version.** Bake the git SHA into the image at
+      build time and show it in the footer / `/healthz`, so "what's live" is
+      checkable without SSH.
+
+## Code health / CI
+
+- [ ] **Add lint + type-check to CI.** `ruff check` + `ruff format --check`
+      and mypy alongside pytest in `.github/workflows/ci.yml` (CI gates
+      deploys, so this directly protects prod).
+- [ ] **Test coverage for the gaps above** as they're fixed: split
+      transactions, YNAB/Frankfurter error paths, 429 handling,
+      zero-decimal budget display.
+- [ ] **Async or pooled HTTP clients.** Routes are sync `def` (fine —
+      FastAPI threadpools them), but `YNABClient` is constructed per request
+      while `FrankfurterClient` is a cached global — pick one lifecycle.
+      Revisit when the scheduler lands, since it will share these clients.
