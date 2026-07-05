@@ -6,6 +6,26 @@
   --border: #e3e6ea;
   --accent: #2563eb;
   --danger: #dc2626;
+  --th-bg: #fafbfc;
+  --flash-bg: #ecfdf5;
+  --flash-border: #6ee7b7;
+  --flash-fg: #065f46;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161c;
+    --fg: #e5e7eb;
+    --muted: #9ca3af;
+    --card: #1e222b;
+    --border: #343a46;
+    --accent: #3b82f6;
+    --danger: #f87171;
+    --th-bg: #232833;
+    --flash-bg: #0c2b22;
+    --flash-border: #14724f;
+    --flash-fg: #6ee7b7;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -71,7 +91,8 @@ input[type="password"], input[type="date"], select {
   border: 1px solid var(--border);
   border-radius: 6px;
   font: inherit;
-  background: #fff;
+  background: var(--card);
+  color: var(--fg);
 }
 
 button, .button {
@@ -123,7 +144,7 @@ th, td {
   font-size: 0.95rem;
 }
 
-th { background: #fafbfc; font-weight: 600; }
+th { background: var(--th-bg); font-weight: 600; }
 tbody tr:last-child td { border-bottom: none; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 td.memo { color: var(--muted); max-width: 16rem; overflow-wrap: anywhere; }
@@ -134,3 +155,33 @@ td.memo { color: var(--muted); max-width: 16rem; overflow-wrap: anywhere; }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1.25rem; margin: 0 0 1rem; }
 dt { font-weight: 600; }
 dd { margin: 0; }
+
+tfoot td { background: var(--th-bg); font-weight: 600; border-top: 2px solid var(--border); }
+
+.flash {
+  background: var(--flash-bg);
+  border: 1px solid var(--flash-border);
+  color: var(--flash-fg);
+  border-radius: 8px;
+  padding: 0.75rem 1.25rem;
+  margin-bottom: 1rem;
+}
+
+/* landing page */
+.hero { text-align: center; padding: 2.5rem 0 1.5rem; }
+.hero h1 { font-size: 2rem; line-height: 1.2; }
+.lede { max-width: 40rem; margin: 0 auto 1rem; color: var(--muted); font-size: 1.05rem; }
+.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin: 1.5rem 0; }
+.step h2, .card h2 { font-size: 1.05rem; margin: 0 0 0.5rem; }
+
+/* small screens: primary usage is from a phone */
+@media (max-width: 700px) {
+  main { margin: 1rem auto; }
+  .steps { grid-template-columns: 1fr; }
+  .hero { padding: 1.5rem 0 0.5rem; }
+  .hero h1 { font-size: 1.5rem; }
+  /* the 7-column preview table: drop the memo column, let the rest scroll */
+  th.memo, td.memo { display: none; }
+  th, td { padding: 0.45rem 0.5rem; font-size: 0.85rem; }
+  table { display: block; overflow-x: auto; }
+}

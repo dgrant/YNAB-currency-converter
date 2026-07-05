@@ -20,7 +20,7 @@
         <th><input type="checkbox" checked onclick="document.querySelectorAll('.row-check').forEach(c => c.checked = this.checked)"></th>
         <th>Date</th>
         <th>Payee</th>
-        <th>Memo</th>
+        <th class="memo">Memo</th>
         <th class="num">Original ({{ conversion.from_currency }})</th>
         <th class="num">Rate</th>
         <th class="num">Converted ({{ conversion.to_currency }})</th>
@@ -46,7 +46,8 @@
     {% if totals %}
     <tfoot>
       <tr>
-        <td colspan="4">Total ({{ rows | length }} row{{ "s" if rows | length != 1 }})</td>
+        <td colspan="3">Total ({{ rows | length }} row{{ "s" if rows | length != 1 }})</td>
+        <td class="memo"></td>
         <td class="num">{{ totals.original }}</td>
         <td></td>
         <td class="num">{{ totals.converted }}</td>

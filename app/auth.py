@@ -60,6 +60,14 @@ async def verify_csrf(request: Request) -> None:
 router = APIRouter(dependencies=[Depends(verify_csrf)])
 
 
+@router.get("/")
+def home(request: Request):
+    """Public landing page; logged-in users go straight to their conversions."""
+    if request.session.get("authed"):
+        return RedirectResponse("/conversions", status_code=303)
+    return templates.TemplateResponse(request, "landing.html", {})
+
+
 @router.get("/login")
 def login_form(request: Request):
     if request.session.get("authed"):

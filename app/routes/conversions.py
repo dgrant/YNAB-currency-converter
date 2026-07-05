@@ -40,11 +40,6 @@ def get_rates_client() -> FrankfurterClient:
     return _rates_client
 
 
-@router.get("/")
-def home():
-    return RedirectResponse("/conversions", status_code=303)
-
-
 @router.get("/conversions")
 def index(request: Request):
     return templates.TemplateResponse(
@@ -145,9 +140,11 @@ def _get_conversion_or_404(conversion_id: str) -> dict:
 
 
 @router.get("/conversions/{conversion_id}")
-def detail(request: Request, conversion_id: str):
+def detail(request: Request, conversion_id: str, applied: int | None = None):
     conversion = _get_conversion_or_404(conversion_id)
-    return templates.TemplateResponse(request, "detail.html", {"conversion": conversion})
+    return templates.TemplateResponse(
+        request, "detail.html", {"conversion": conversion, "applied": applied}
+    )
 
 
 @router.get("/conversions/{conversion_id}/edit")
@@ -260,8 +257,6 @@ async def apply(request: Request, conversion_id: str):
     updated = []
     if updates:
         updated = get_ynab().update_transactions(conversion["budget_id"], updates)
-    return templates.TemplateResponse(
-        request,
-        "applied.html",
-        {"conversion": conversion, "count": len(updated)},
+    return RedirectResponse(
+        f"/conversions/{conversion_id}?applied={len(updated)}", status_code=303
     )

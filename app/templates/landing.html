@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}YNAB Currency Converter — multi-currency for YNAB{% endblock %}
+{% block content %}
+<div class="hero">
+  <h1>Spend in any currency.<br>Budget in yours.</h1>
+  <p class="lede">
+    Enter YNAB transactions in their original foreign currency — yen in Tokyo,
+    euros in Lisbon — and this app converts each one to your budget's currency
+    using the official exchange rate <em>of the transaction's date</em>,
+    updating the amount right in YNAB.
+  </p>
+  <p><a class="button primary" href="/login">Log in</a></p>
+</div>
+
+<div class="steps">
+  <div class="card step">
+    <h2>1. Point it at an account</h2>
+    <p>Pick the YNAB account where you enter foreign-currency transactions,
+       the currency they're in, and a start date.</p>
+  </div>
+  <div class="card step">
+    <h2>2. Preview</h2>
+    <p>See every unconverted transaction with its date-accurate ECB exchange
+       rate and the exact amount it will become. Untick anything you want to
+       leave alone.</p>
+  </div>
+  <div class="card step">
+    <h2>3. Approve</h2>
+    <p>One click updates the amounts in YNAB and notes the original amount and
+       rate in each memo, e.g. <code>-1,817 JPY (FX rate: 0.0087987)</code> —
+       so nothing is ever converted twice.</p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Your data stays yours</h2>
+  <p>Nothing is written to YNAB without your explicit approval, and the app
+     stores no transaction data at all — the preview you approve is exactly
+     what gets applied. Exchange rates come from the European Central Bank via
+     the free <a href="https://frankfurter.dev" rel="noopener">Frankfurter</a> API.</p>
+</div>
+{% endblock %}

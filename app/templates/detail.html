@@ -4,6 +4,12 @@
   <h1>{{ conversion.account_name }}</h1>
   <a href="/conversions">← All conversions</a>
 </div>
+{% if applied is not none %}
+<div class="flash">
+  {{ applied }} transaction{{ "s" if applied != 1 }} updated in YNAB.
+  Preview again to check for anything new.
+</div>
+{% endif %}
 <div class="card">
   <dl>
     <dt>Budget</dt><dd>{{ conversion.budget_name }}</dd>

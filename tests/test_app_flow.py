@@ -55,6 +55,18 @@ def test_login_required(app_client):
     assert response.headers["location"] == "/login"
 
 
+def test_landing_page_is_public(app_client):
+    response = app_client.get("/")
+    assert response.status_code == 200
+    assert "Log in" in response.text
+    assert "exchange rate" in response.text
+    # once logged in, / goes straight to the conversions list
+    login(app_client)
+    response = app_client.get("/", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/conversions"
+
+
 def test_wrong_password_rejected(app_client):
     token = get_csrf(app_client)
     response = app_client.post("/login", data={"password": "nope", "csrf_token": token})
@@ -156,7 +168,10 @@ def test_full_conversion_flow(app_client):
         "memo_t1": "-1,817 JPY (FX rate: 0.0087987)",
         "csrf_token": token,
     })
+    # apply redirects back to the detail page with a flash
     assert applied.status_code == 200
+    assert str(applied.url).endswith(f"/conversions/{conversion_id}?applied=1")
+    assert "1 transaction updated in YNAB" in applied.text
 
     assert patch_route.called
     body = json.loads(patch_route.calls[0].request.content)
@@ -182,6 +197,7 @@ def test_apply_with_nothing_selected_patches_nothing(app_client):
         f"/conversions/{conversion_id}/apply", data={"csrf_token": token}
     )
     assert applied.status_code == 200
+    assert "0 transactions updated in YNAB" in applied.text
     assert not patch_route.called
 
 
