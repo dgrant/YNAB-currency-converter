@@ -171,3 +171,17 @@ def test_transient_refresh_failure_keeps_connection(tmp_path):
     with pytest.raises(YNABError):
         get_access_token(SETTINGS, store, user.id)
     assert store.get(user.id) is not None  # not deleted — YNAB was just down
+
+
+@respx.mock
+def test_malformed_refresh_payload_keeps_connection(tmp_path):
+    # A 200 without the tokens must be transient (YNABError), not a dead grant:
+    # the still-valid connection must survive, not be deleted.
+    respx.post(f"{OAUTH}/oauth/token").mock(
+        return_value=Response(200, json={"token_type": "Bearer"})
+    )
+    user, store = make_user_and_store(tmp_path)
+    store.set_oauth(user.id, "stale", "refresh", time.time() - 10)
+    with pytest.raises(YNABError):
+        get_access_token(SETTINGS, store, user.id)
+    assert store.get(user.id) is not None

@@ -50,7 +50,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.secret_key,
-        https_only=False,
+        https_only=settings.session_https_only,
         same_site="lax",
     )
 
@@ -73,6 +73,12 @@ def create_app() -> FastAPI:
         headers.setdefault("X-Frame-Options", "DENY")
         headers.setdefault("X-Content-Type-Options", "nosniff")
         headers.setdefault("Referrer-Policy", "same-origin")
+        # Only on the HTTPS deployment (same flag that makes the session cookie
+        # Secure); sending HSTS over plain http dev would be wrong.
+        if settings.session_https_only:
+            headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+            )
         # 'unsafe-inline' script-src: the templates use small inline scripts
         # (form wiring, confirm dialogs) and no external resources at all.
         headers.setdefault(

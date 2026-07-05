@@ -132,7 +132,7 @@ def create(
     to_currency: str = Form(...),
     start_date: str = Form(...),
 ):
-    date.fromisoformat(start_date)
+    _validate_start_date(start_date)
     _reject_duplicate_account(user.id, account_id)
     _validate_to_currency(ynab, budget_id, to_currency.upper())
     conversion = get_store().add(
@@ -155,6 +155,14 @@ def _get_conversion_or_404(user_id: str, conversion_id: str) -> dict:
     if conversion is None:
         raise HTTPException(404, "Conversion not found")
     return conversion
+
+
+def _validate_start_date(start_date: str) -> None:
+    """A tampered/malformed start_date is a 400, not an unhandled 500."""
+    try:
+        date.fromisoformat(start_date)
+    except ValueError as exc:
+        raise HTTPException(400, "start_date must be a valid YYYY-MM-DD date") from exc
 
 
 @router.get("/conversions/{conversion_id}")
@@ -205,7 +213,7 @@ def edit(
     to_currency: str = Form(...),
     start_date: str = Form(...),
 ):
-    date.fromisoformat(start_date)
+    _validate_start_date(start_date)
     _get_conversion_or_404(user.id, conversion_id)
     _reject_duplicate_account(user.id, account_id, except_conversion_id=conversion_id)
     _validate_to_currency(ynab, budget_id, to_currency.upper())

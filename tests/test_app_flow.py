@@ -398,3 +398,19 @@ def test_users_cannot_see_each_others_conversions(app_client):
 
     # alice still has her conversion
     assert app_client.get(f"/conversions/{conversion_id}").status_code == 200
+
+
+@respx.mock
+def test_malformed_start_date_is_400_not_500(app_client):
+    mock_budgets()
+    token = login(app_client)
+    # a tampered/malformed start_date must be a 400, like the apply route,
+    # not an unhandled 500
+    response = app_client.post("/conversions", data={
+        "budget_id": "b1", "budget_name": "My Budget",
+        "account_id": "a1", "account_name": "Japan Trip",
+        "from_currency": "JPY", "to_currency": "USD",
+        "start_date": "not-a-date", "csrf_token": token,
+    })
+    assert response.status_code == 400
+    assert "valid YYYY-MM-DD" in response.text

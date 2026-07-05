@@ -17,6 +17,10 @@ nano .env        # set SECRET_KEY (and optionally YNAB_CLIENT_ID/SECRET + PUBLIC
 docker compose up -d --build
 ```
 
+On a public HTTPS deployment also set `SESSION_HTTPS_ONLY=true` in `.env` so the
+session cookie is marked `Secure` and an HSTS header is sent (leave it unset for
+local http development).
+
 The app now listens on `127.0.0.1:8000` (localhost only — not reachable
 from the internet until you set up one of the access options below).
 `data/app.db` (the only persistent state: user accounts, their YNAB

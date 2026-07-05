@@ -181,3 +181,27 @@ def test_stale_session_user_is_logged_out(app_client, tmp_path):
     response = app_client.get("/conversions", follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
+
+
+def test_https_only_deployment_sends_hsts_and_secure_cookie(app_client_factory):
+    from fastapi.testclient import TestClient
+
+    with app_client_factory(SESSION_HTTPS_ONLY="true") as client:
+        # HSTS is sent on the HTTPS deployment
+        resp = client.get("/login")
+        assert resp.headers["Strict-Transport-Security"].startswith("max-age=")
+
+        # Over an actual https request the session cookie is marked Secure
+        # (Starlette only emits the cookie over TLS when https_only is set).
+        https = TestClient(client.app, base_url="https://testserver")
+        resp = https.post(
+            "/signup",
+            data={"email": "s@example.com", "password": "password123",
+                  "csrf_token": get_csrf(https)},
+            follow_redirects=False,
+        )
+        assert any("secure" in c.lower() for c in resp.headers.get_list("set-cookie"))
+
+
+def test_http_dev_has_no_hsts(app_client):
+    assert "Strict-Transport-Security" not in app_client.get("/login").headers

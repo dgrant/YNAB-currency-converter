@@ -30,6 +30,13 @@ class Settings:
         # OAuth redirect URI behind the reverse proxy; derived from the
         # request when unset.
         self.public_base_url = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+        # Set true on the HTTPS deployment so the session cookie gets Secure and
+        # an HSTS header is sent; keep false for local http dev.
+        self.session_https_only = os.environ.get("SESSION_HTTPS_ONLY", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
         # Git SHA baked into the image at build time (Dockerfile ARG GIT_SHA);
         # "dev" when running outside the built image.
         self.app_version = os.environ.get("APP_VERSION", "dev")

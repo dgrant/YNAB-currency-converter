@@ -46,7 +46,13 @@ def _token_request(settings: Settings, data: dict) -> dict:
     except httpx.TransportError as exc:
         raise YNABError(f"Could not reach YNAB: {exc}") from exc
     if response.is_success:
-        return response.json()
+        payload = response.json()
+        # A 200 that omits the tokens (unexpected from YNAB) is treated as a
+        # transient error, not a dead grant — don't destroy a live connection
+        # over a malformed refresh response; surface a friendly 502 instead.
+        if not payload.get("access_token") or not payload.get("refresh_token"):
+            raise YNABError("YNAB returned an unexpected OAuth token response")
+        return payload
     if 400 <= response.status_code < 500:
         raise OAuthGrantError(f"YNAB rejected the authorization ({response.status_code})")
     raise YNABError(
