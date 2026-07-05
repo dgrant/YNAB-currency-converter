@@ -11,6 +11,7 @@
     <dt>Start date</dt><dd>{{ conversion.start_date }}</dd>
   </dl>
   <form method="post" action="/conversions/{{ conversion.id }}/preview">
+    {{ csrf_input(request) }}
     <button type="submit" class="primary">Preview sync</button>
   </form>
   <p class="hint">Preview fetches this account's transactions from YNAB (since the
@@ -21,6 +22,7 @@
   <a class="button" href="/conversions/{{ conversion.id }}/edit">Edit</a>
   <form method="post" action="/conversions/{{ conversion.id }}/delete"
         onsubmit="return confirm('Delete this conversion? (YNAB data is not touched.)')">
+    {{ csrf_input(request) }}
     <button type="submit" class="link danger">Delete</button>
   </form>
 </div>

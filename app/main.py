@@ -32,6 +32,23 @@ def create_app() -> FastAPI:
         same_site="lax",
     )
 
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        headers = response.headers
+        headers.setdefault("X-Frame-Options", "DENY")
+        headers.setdefault("X-Content-Type-Options", "nosniff")
+        headers.setdefault("Referrer-Policy", "same-origin")
+        # 'unsafe-inline' script-src: the templates use small inline scripts
+        # (form wiring, confirm dialogs) and no external resources at all.
+        headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+            "style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; "
+            "form-action 'self'; base-uri 'self'",
+        )
+        return response
+
     @app.exception_handler(YNABError)
     async def ynab_error(request: Request, exc: YNABError) -> Response:
         if exc.status_code == 429:

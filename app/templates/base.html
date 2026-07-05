@@ -12,6 +12,7 @@
       <a class="brand" href="/conversions">YNAB Currency Converter</a>
       {% if request.session.get("authed") %}
       <form method="post" action="/logout">
+        {{ csrf_input(request) }}
         <button type="submit" class="link">Log out</button>
       </form>
       {% endif %}

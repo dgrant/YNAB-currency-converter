@@ -3,7 +3,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-from ..auth import require_login
+from ..auth import require_login, verify_csrf
 from ..config import get_settings
 from ..convert import build_preview, format_amount, format_original, is_converted, is_split
 from ..rates import FrankfurterClient
@@ -11,7 +11,7 @@ from ..store import ConversionStore
 from ..templates import templates
 from ..ynab import YNABClient
 
-router = APIRouter(dependencies=[Depends(require_login)])
+router = APIRouter(dependencies=[Depends(require_login), Depends(verify_csrf)])
 
 # Both HTTP clients are process-wide singletons so connections are pooled
 # across requests (tests reset them; see conftest.py).

@@ -13,6 +13,7 @@
    split transactions aren't supported yet; convert them manually in YNAB.</p>
 {% endif %}
 <form method="post" action="/conversions/{{ conversion.id }}/apply">
+  {{ csrf_input(request) }}
   <table>
     <thead>
       <tr>

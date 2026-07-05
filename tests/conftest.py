@@ -20,6 +20,10 @@ def app_client(tmp_path, monkeypatch):
 
     monkeypatch.setattr(app_http, "RETRY_DELAY_SECONDS", 0)
 
+    import app.auth as auth
+
+    auth._reset_throttle()  # login-throttle state is module-level
+
     from fastapi.testclient import TestClient
 
     from app.main import create_app

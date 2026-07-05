@@ -5,6 +5,7 @@
   <form method="post"
         action="{{ '/conversions/' + conversion.id + '/edit' if conversion else '/conversions' }}"
         id="conversion-form">
+    {{ csrf_input(request) }}
     <label for="budget">Budget</label>
     <select id="budget" name="budget_id" required></select>
 

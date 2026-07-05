@@ -4,6 +4,7 @@ YNAB and Frankfurter are mocked with respx; assertions check the exact
 PATCH body sent to YNAB.
 """
 import json
+import re
 
 import respx
 from httpx import Response
@@ -12,9 +13,23 @@ YNAB = "https://api.ynab.com/v1"
 FX = "https://api.frankfurter.dev/v1"
 
 
+CSRF_RE = re.compile(r'name="csrf_token" value="([^"]+)"')
+
+
+def get_csrf(client):
+    """The login page (like every form page) embeds the session's CSRF token."""
+    return CSRF_RE.search(client.get("/login").text).group(1)
+
+
 def login(client):
-    response = client.post("/login", data={"password": "test-password"}, follow_redirects=False)
+    token = get_csrf(client)
+    response = client.post(
+        "/login",
+        data={"password": "test-password", "csrf_token": token},
+        follow_redirects=False,
+    )
     assert response.status_code == 303
+    return token
 
 
 def mock_budgets(iso_code="USD"):
@@ -27,6 +42,13 @@ def mock_budgets(iso_code="USD"):
     )
 
 
+def test_security_headers_present(app_client):
+    response = app_client.get("/login")
+    assert response.headers["X-Frame-Options"] == "DENY"
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert "default-src 'self'" in response.headers["Content-Security-Policy"]
+
+
 def test_login_required(app_client):
     response = app_client.get("/conversions", follow_redirects=False)
     assert response.status_code == 303
@@ -34,8 +56,49 @@ def test_login_required(app_client):
 
 
 def test_wrong_password_rejected(app_client):
-    response = app_client.post("/login", data={"password": "nope"})
+    token = get_csrf(app_client)
+    response = app_client.post("/login", data={"password": "nope", "csrf_token": token})
     assert response.status_code == 401
+
+
+def test_login_brute_force_throttled(app_client):
+    import app.auth as auth
+
+    token = get_csrf(app_client)
+    for _ in range(auth.LOCKOUT_THRESHOLD):
+        response = app_client.post("/login", data={"password": "nope", "csrf_token": token})
+        assert response.status_code == 401
+    # locked out now — even the correct password is refused until the delay passes
+    response = app_client.post(
+        "/login", data={"password": "test-password", "csrf_token": token}
+    )
+    assert response.status_code == 429
+    assert "Too many failed attempts" in response.text
+    # once the lockout expires, the correct password works and resets the counter
+    auth._throttle["locked_until"] = 0.0
+    response = app_client.post(
+        "/login", data={"password": "test-password", "csrf_token": token},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert auth._throttle["failures"] == 0
+
+
+def test_post_without_csrf_token_rejected(app_client):
+    # no token at all
+    assert app_client.post("/login", data={"password": "test-password"}).status_code == 403
+    # wrong token
+    get_csrf(app_client)
+    response = app_client.post(
+        "/login", data={"password": "test-password", "csrf_token": "forged"}
+    )
+    assert response.status_code == 403
+    # authenticated POSTs are protected too
+    token = login(app_client)
+    assert app_client.post("/conversions/x/delete", data={}).status_code == 403
+    assert app_client.post(
+        "/conversions/x/delete", data={"csrf_token": token}, follow_redirects=False
+    ).status_code == 303  # valid token: passes CSRF, delete of unknown id just redirects
 
 
 @respx.mock
@@ -61,18 +124,20 @@ def test_full_conversion_flow(app_client):
         return_value=Response(200, json={"data": {"transactions": [{"id": "t1"}]}})
     )
 
-    login(app_client)
+    token = login(app_client)
 
     response = app_client.post("/conversions", data={
         "budget_id": "b1", "budget_name": "My Budget",
         "account_id": "a1", "account_name": "Japan Trip",
         "from_currency": "JPY", "to_currency": "USD",
-        "start_date": "2024-01-01",
+        "start_date": "2024-01-01", "csrf_token": token,
     }, follow_redirects=False)
     assert response.status_code == 303
     conversion_id = response.headers["location"].rsplit("/", 1)[-1]
 
-    preview = app_client.post(f"/conversions/{conversion_id}/preview")
+    preview = app_client.post(
+        f"/conversions/{conversion_id}/preview", data={"csrf_token": token}
+    )
     assert preview.status_code == 200
     # t1 proposed; t2 already converted (rmillan memo) so it must not appear;
     # t3 is a split and must be skipped with a note
@@ -89,6 +154,7 @@ def test_full_conversion_flow(app_client):
         "selected": ["t1"],
         "amount_t1": "-15990",
         "memo_t1": "-1,817 JPY (FX rate: 0.0087987)",
+        "csrf_token": token,
     })
     assert applied.status_code == 200
 
@@ -103,16 +169,18 @@ def test_full_conversion_flow(app_client):
 def test_apply_with_nothing_selected_patches_nothing(app_client):
     mock_budgets()
     patch_route = respx.patch(f"{YNAB}/budgets/b1/transactions")
-    login(app_client)
+    token = login(app_client)
     response = app_client.post("/conversions", data={
         "budget_id": "b1", "budget_name": "My Budget",
         "account_id": "a1", "account_name": "Japan Trip",
         "from_currency": "JPY", "to_currency": "USD",
-        "start_date": "2024-01-01",
+        "start_date": "2024-01-01", "csrf_token": token,
     }, follow_redirects=False)
     conversion_id = response.headers["location"].rsplit("/", 1)[-1]
 
-    applied = app_client.post(f"/conversions/{conversion_id}/apply", data={})
+    applied = app_client.post(
+        f"/conversions/{conversion_id}/apply", data={"csrf_token": token}
+    )
     assert applied.status_code == 200
     assert not patch_route.called
 
@@ -135,7 +203,7 @@ def test_edit_conversion(app_client):
         return_value=Response(200, json={"JPY": "Japanese Yen", "EUR": "Euro", "USD": "US Dollar"})
     )
 
-    login(app_client)
+    token = login(app_client)
 
     # the same template also serves the new-conversion form
     new_form = app_client.get("/conversions/new")
@@ -146,7 +214,7 @@ def test_edit_conversion(app_client):
         "budget_id": "b1", "budget_name": "My Budget",
         "account_id": "a1", "account_name": "Japan Trip",
         "from_currency": "JPY", "to_currency": "USD",
-        "start_date": "2024-01-01",
+        "start_date": "2024-01-01", "csrf_token": token,
     }, follow_redirects=False)
     conversion_id = response.headers["location"].rsplit("/", 1)[-1]
 
@@ -165,7 +233,7 @@ def test_edit_conversion(app_client):
         "budget_id": "b1", "budget_name": "My Budget",
         "account_id": "a2", "account_name": "Europe Trip",
         "from_currency": "EUR", "to_currency": "USD",
-        "start_date": "2024-03-15",
+        "start_date": "2024-03-15", "csrf_token": token,
     }, follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"] == f"/conversions/{conversion_id}"
@@ -181,7 +249,7 @@ def test_edit_conversion(app_client):
         "budget_id": "b1", "budget_name": "My Budget",
         "account_id": "a1", "account_name": "Japan Trip",
         "from_currency": "JPY", "to_currency": "USD",
-        "start_date": "2024-01-01",
+        "start_date": "2024-01-01", "csrf_token": token,
     }).status_code == 404
 
 
@@ -189,12 +257,12 @@ def test_edit_conversion(app_client):
 def test_to_currency_must_match_budget_currency(app_client):
     # The budget is USD, so a conversion "to EUR" is a form mismatch -> 400
     mock_budgets(iso_code="USD")
-    login(app_client)
+    token = login(app_client)
     response = app_client.post("/conversions", data={
         "budget_id": "b1", "budget_name": "My Budget",
         "account_id": "a1", "account_name": "Japan Trip",
         "from_currency": "JPY", "to_currency": "EUR",
-        "start_date": "2024-01-01",
+        "start_date": "2024-01-01", "csrf_token": token,
     })
     assert response.status_code == 400
     assert "uses USD" in response.text
@@ -204,7 +272,7 @@ def test_to_currency_must_match_budget_currency(app_client):
         "budget_id": "nope", "budget_name": "Ghost",
         "account_id": "a9", "account_name": "Ghost account",
         "from_currency": "JPY", "to_currency": "USD",
-        "start_date": "2024-01-01",
+        "start_date": "2024-01-01", "csrf_token": token,
     })
     assert response.status_code == 400
 
@@ -212,12 +280,12 @@ def test_to_currency_must_match_budget_currency(app_client):
 @respx.mock
 def test_duplicate_account_rejected(app_client):
     mock_budgets()
-    login(app_client)
+    token = login(app_client)
     japan = {
         "budget_id": "b1", "budget_name": "My Budget",
         "account_id": "a1", "account_name": "Japan Trip",
         "from_currency": "JPY", "to_currency": "USD",
-        "start_date": "2024-01-01",
+        "start_date": "2024-01-01", "csrf_token": token,
     }
     assert app_client.post("/conversions", data=japan, follow_redirects=False).status_code == 303
 
