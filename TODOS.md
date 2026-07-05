@@ -21,6 +21,16 @@ not break (memo marker format, milliunit math, preview→approve contract).
       `-1,817 JPY (FX rate: 0.0087987)` back out, restore the original
       milliunits, strip the marker from the memo. Per-transaction and
       whole-batch undo on the applied page.
+- [ ] **Skip transactions + respect rmillan's `(skipped)` memo marker.**
+      rmillan's site appears to append a `(skipped)` string to the memo of
+      transactions the user chose not to convert (unverified — confirm the
+      exact format first; see the rmillan notes at the bottom for how to
+      test). Two parts: (a) treat memos containing that marker as
+      not-to-convert in `build_preview` (like `MARKER_RE`), otherwise
+      transactions skipped on rmillan's site reappear in every preview here
+      forever; (b) add a "Skip" action in our preview that writes the same
+      marker to the memo, so unticking a transaction can be made permanent.
+      Keep the string byte-compatible with rmillan's, same as the FX marker.
 - [x] **Edit a conversion.** Done: `/conversions/{id}/edit` (shared
       `conversion_form.html` with the new form), plus Edit/Delete on the
       detail page.
@@ -154,3 +164,27 @@ not break (memo marker format, milliunit math, preview→approve contract).
       FastAPI threadpools them), but `YNABClient` is constructed per request
       while `FrankfurterClient` is a cached global — pick one lifecycle.
       Revisit when the scheduler lands, since it will share these clients.
+
+## Notes from investigating ynab.rmillan.com (2026-07-05)
+
+Findings from actually signing up and poking at the reference site — useful
+when working the OAuth, multi-user, and `(skipped)` items above:
+
+- **Sign-up is instant** — email + password at
+  https://ynab.rmillan.com/users/sign_up (Rails/Devise), no email
+  confirmation. Creating a throwaway account to inspect behavior takes
+  seconds; a mailinator address works. This is the way to verify the exact
+  `(skipped)` memo format: connect a test YNAB budget, skip a transaction
+  there, and look at what it writes to the memo.
+- **"Connect to YNAB" is standard YNAB OAuth** (authorization-code flow):
+  the button links to `https://app.youneedabudget.com/oauth/authorize` with
+  their `client_id` and `redirect_uri=https://ynab.rmillan.com/oauth`. End
+  users never need an API key — only the app owner registers an OAuth app
+  (free, YNAB Developer Settings). Details folded into the YNAB OAuth item.
+- **They store pending transactions server-side; we don't.** Their privacy
+  copy: pending conversions are temporarily saved in their database until
+  approved, cleaned up hourly if abandoned. Our preview→approve instead
+  round-trips the proposed amounts/memos through hidden form fields, so
+  nothing is persisted. Keep our stateless design — it's a feature, not a
+  gap (relevant when building the scheduler, which must not quietly turn
+  into server-side pending state).
