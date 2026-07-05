@@ -135,7 +135,20 @@ not break (memo marker format, milliunit math, preview→approve contract).
 
 ## Ops / deployment
 
-- [ ] **`/healthz` endpoint.** Unauthenticated, no side effects, returns 200
+- [ ] **Deploy via GitHub Actions** instead of the server-side cron poller.
+      A workflow job (after CI passes on master) that SSHes into the Linode
+      and runs `deploy/autodeploy.sh` (or `git pull && docker compose up -d
+      --build`) — deploys seconds after merge instead of within ~2 minutes,
+      with logs visible in the Actions UI instead of `~/autodeploy.log`.
+      This was considered and skipped in v1 (see "Alternative considered" in
+      DEPLOY.md) because it needs an SSH private key stored as a repo secret
+      in a public repo, whereas the poller needs no credentials in either
+      direction. If revisiting: use a dedicated deploy key restricted with
+      an `authorized_keys` `command=` (forced command) so the key can only
+      trigger the deploy script, nothing else; keep the cron poller as
+      fallback or remove it to avoid double deploys. Note the sandbox
+      caveat: agents can't SSH to the server, so setting up the key/secret
+      is guided-manual with David. Unauthenticated, no side effects, returns 200
       + version/SHA. Point `deploy/autodeploy.sh`'s health check and a
       `docker compose` `healthcheck:` at it instead of `/login`.
 - [ ] **Deploy failure notifications.** Autodeploy failures only land in
