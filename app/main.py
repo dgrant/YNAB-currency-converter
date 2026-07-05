@@ -8,10 +8,11 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import auth
+from . import auth, db
 from .config import get_settings
 from .rates import RatesError
 from .routes import conversions
+from .routes import settings as settings_routes
 from .templates import templates
 from .ynab import YNABError
 
@@ -39,6 +40,7 @@ def _error_page(
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    db.init(settings.data_dir)
     # CSRF verification is app-level so every router — present and future —
     # is covered without opting in (it no-ops on non-POST requests).
     app = FastAPI(
@@ -48,7 +50,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.secret_key,
-        https_only=False,
+        https_only=settings.session_https_only,
         same_site="lax",
     )
 
@@ -71,6 +73,12 @@ def create_app() -> FastAPI:
         headers.setdefault("X-Frame-Options", "DENY")
         headers.setdefault("X-Content-Type-Options", "nosniff")
         headers.setdefault("Referrer-Policy", "same-origin")
+        # Only on the HTTPS deployment (same flag that makes the session cookie
+        # Secure); sending HSTS over plain http dev would be wrong.
+        if settings.session_https_only:
+            headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+            )
         # 'unsafe-inline' script-src: the templates use small inline scripts
         # (form wiring, confirm dialogs) and no external resources at all.
         headers.setdefault(
@@ -130,6 +138,7 @@ def create_app() -> FastAPI:
         name="static",
     )
     app.include_router(auth.router)
+    app.include_router(settings_routes.router)
     app.include_router(conversions.router)
     return app
 

@@ -13,14 +13,35 @@
 git clone https://github.com/dgrant/YNAB-currency-converter.git
 cd YNAB-currency-converter
 cp .env.example .env
-nano .env        # set APP_PASSWORD, SECRET_KEY, YNAB_TOKEN
+nano .env        # set SECRET_KEY (and optionally YNAB_CLIENT_ID/SECRET + PUBLIC_BASE_URL)
 docker compose up -d --build
 ```
 
+On a public HTTPS deployment also set `SESSION_HTTPS_ONLY=true` in `.env` so the
+session cookie is marked `Secure` and an HSTS header is sent (leave it unset for
+local http development).
+
 The app now listens on `127.0.0.1:8000` (localhost only — not reachable
-from the internet until you set up one of the access options below). `data/conversions.json` (the only persistent
-state) lives in `./data` on the host — back it up if you care about your
-conversion configs; losing it never touches your YNAB data.
+from the internet until you set up one of the access options below).
+`data/app.db` (the only persistent state: user accounts, their YNAB
+credentials, and conversion configs) lives in `./data` on the host — back it
+up; losing it never touches anyone's YNAB data, but users would have to sign
+up and reconnect again.
+
+## Migrating a v1 (single-user) deployment
+
+v1 kept `APP_PASSWORD`/`YNAB_TOKEN` in `.env` and conversions in
+`data/conversions.json`. After updating, run once (old `.env` still in
+place):
+
+```bash
+docker compose exec app python -m app.import_legacy you@example.com
+```
+
+That creates a user with that email whose password is the old
+`APP_PASSWORD`, stores the old `YNAB_TOKEN` as their YNAB connection, and
+imports `conversions.json` (renaming it to `conversions.json.imported`).
+Afterwards `APP_PASSWORD` and `YNAB_TOKEN` can be removed from `.env`.
 
 The app process runs as an unprivileged user (uid 1000), not root. The
 container entrypoint starts as root just long enough to `chown` the

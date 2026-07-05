@@ -55,37 +55,53 @@ not break (memo marker format, milliunit math, preview→approve contract).
       amount client-side or on re-preview) for cash exchanged at a
       non-market rate, card FX fees, etc.
 - [ ] **Google Sign-In.** `app/auth.py` is the designed swap point: replace
-      the password routes with an OIDC flow that sets the same `authed`
-      session key for allowlisted emails; `require_login` stays as-is.
-- [ ] **YNAB OAuth** instead of a personal access token. Prerequisite for
-      multi-user; also removes the long-lived token from `.env`. Confirmed
-      how ynab.rmillan.com does it (2026-07): a "Connect to YNAB" button
-      linking to `https://app.youneedabudget.com/oauth/authorize?client_id=…
-      &response_type=code&redirect_uri=https://ynab.rmillan.com/oauth` —
-      the standard authorization-code flow. End users need no API key; they
-      just click Authorize in YNAB. The app owner registers an OAuth
-      application once (free, YNAB Developer Settings) to get the
-      client id/secret and set the redirect URI. Implementation here:
-      `/oauth/start` + `/oauth/callback` routes, exchange code for
-      access+refresh tokens, store per user, refresh on expiry;
-      `YNABClient` already takes a bearer token so only token acquisition
-      changes.
-- [ ] **Disconnect / unauthenticate from YNAB.** A settings action that
-      severs the YNAB connection. Today (PAT in `.env`) that's just docs —
-      revoke the token in YNAB's Developer Settings and clear `YNAB_TOKEN`.
-      Once YNAB OAuth lands (item above) it becomes a real feature: a
-      "Disconnect from YNAB" button that deletes the stored access/refresh
-      tokens and revokes the grant, with the UI returning to the
-      "Connect to YNAB" state (rmillan advertises exactly this:
-      "you can revoke this authorization at any moment"). Handle the
-      revoked-token case gracefully everywhere either way — it's the same
-      code path as a user revoking access from the YNAB side.
-- [ ] **Multi-user.** Per-user YNAB credentials and conversion lists. Order
-      of work: YNAB OAuth first (per-user tokens), then real sign-in
-      (Google via `auth.py`, or email+password like rmillan's Devise
-      signup), then scope conversions by user. This is the point where
-      `data/conversions.json` should become SQLite — don't add a database
-      before this.
+      the password routes with an OIDC flow that sets the same `user_id`
+      session key (creating the user row on first sign-in); `require_login`
+      stays as-is.
+- [x] **YNAB OAuth.** Done: `/oauth/ynab/start` + `/oauth/ynab/callback`
+      (authorization-code flow with state check), tokens stored per user,
+      auto-refresh on expiry with a 60s margin (`app/oauth.py`). Activated
+      by registering an OAuth app (free, YNAB Developer Settings; redirect
+      URI `<origin>/oauth/ynab/callback`) and setting `YNAB_CLIENT_ID` /
+      `YNAB_CLIENT_SECRET` (+ `PUBLIC_BASE_URL` behind the proxy) — not yet
+      done for the live deployment, which needs David to register the app.
+      Until then users paste personal access tokens.
+### Lift the YNAB OAuth app out of Restricted Mode
+
+A freshly registered OAuth app is token-capped (~25 access tokens), so
+beyond a handful of connected users new "Connect to YNAB" authorizations
+fail. Removing the cap means passing YNAB's OAuth App Review (Asana form).
+Not blocking for friends-and-family scale — users can always paste a
+personal access token on `/settings` (no cap). The review's prerequisites,
+each as its own task:
+
+- [ ] **Footer trademark disclaimer.** Add to every page footer
+      (`templates/base.html`): "We are not affiliated, associated, or in
+      any way officially connected with YNAB… The names YNAB and You Need A
+      Budget… are registered trademarks of YNAB." (Exact wording is on the
+      review form.)
+- [ ] **Real Privacy Policy page.** Add a `/privacy` route + page that
+      explains how data obtained through the YNAB API is handled, stored,
+      and secured (today it's only the landing-page blurb). Link it from the
+      footer and use its URL in Developer Settings + the review form.
+- [ ] **"Plan" not "budget" branding.** YNAB brand language prefers "plan"
+      over "budget" where applicable; the UI/copy say "budget" throughout.
+      Decide how far to reword, and make sure nothing implies YNAB
+      endorsement.
+- [ ] **Confirm name uniqueness + logo rules.** App name must not already
+      be on the Works With YNAB list; no YNAB logos except the authorized
+      "Works with YNAB" logo (we use none today — just verify).
+- [ ] **Submit the OAuth App Review form** (Asana) once the above are live,
+      to have Restricted Mode removed. Auth is already OAuth-only, which the
+      form requires.
+- [x] **Multi-user.** Done (2026-07): email+password signup like rmillan's,
+      per-user YNAB credentials (OAuth or PAT), conversions scoped by
+      `user_id`, all in SQLite (`data/app.db` — users, ynab_connections,
+      conversions). `python -m app.import_legacy <email>` migrates a v1
+      deployment. Follow-ups worth considering: password reset (needs
+      outbound email), account deletion, validating a pasted PAT against
+      `GET /user` at save time, and signup abuse controls if it's ever
+      opened up beyond friends & family.
 - [ ] **Crypto / non-ECB currencies.** Frankfurter is ~30 fiat currencies
       (ECB data). Add a second rate source behind the `RateTable` interface
       (e.g. CoinGecko for crypto) and pick per conversion.
@@ -168,9 +184,11 @@ not break (memo marker format, milliunit math, preview→approve contract).
       failed deploy or failed health check.
 - [ ] **Uptime monitoring.** A free external monitor (UptimeRobot etc.)
       hitting `/healthz` — currently nothing notices if the site is down.
-- [ ] **Back up `data/conversions.json` off-site.** It's tiny, recreatable by
-      hand, but a one-line cron append to a private gist / rclone target
-      removes the "recreate from memory" step after a disk loss.
+- [ ] **Back up `data/app.db` off-site.** It now holds user accounts and
+      YNAB credentials, not just conversion configs, so it's no longer
+      recreatable from memory — a nightly cron copy (`sqlite3 app.db
+      ".backup ..."`) to an rclone target is worth doing. (Was: back up
+      `conversions.json`.)
 - [x] **Dependency updates.** Done: `.github/dependabot.yml` (pip + GitHub
       Actions, weekly); CI green = auto-deployable.
 - [x] **Expose the running version.** Done: `GET /healthz` (unauthenticated)
