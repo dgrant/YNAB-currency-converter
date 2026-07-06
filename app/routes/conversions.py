@@ -2,6 +2,7 @@ import asyncio
 from datetime import date
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse
 
 from .. import oauth
@@ -384,9 +385,16 @@ async def apply(
         # approves (double-click, two tabs) can't both pass the re-checks
         # below against the same pre-PATCH state and race. (`ynab` is the
         # per-user client injected as a dependency.)
+        # The YNAB client is synchronous; run its calls in the threadpool so a
+        # slow round-trip doesn't stall the event loop (and with it every
+        # other user's request). This also makes the lock do real work: with
+        # the I/O yielding, two concurrent applies genuinely interleave.
         async with _apply_lock(conversion_id):
-            current = ynab.get_transactions(
-                conversion["budget_id"], conversion["account_id"], conversion["start_date"]
+            current = await run_in_threadpool(
+                ynab.get_transactions,
+                conversion["budget_id"],
+                conversion["account_id"],
+                conversion["start_date"],
             )
             current_by_id = {t["id"]: t for t in current}
             present_ids = set(current_by_id)
@@ -419,7 +427,9 @@ async def apply(
             ]
             skipped_splits = sum(1 for u in updates if u["id"] in split_ids)
             if safe:
-                updated = ynab.update_transactions(conversion["budget_id"], safe)
+                updated = await run_in_threadpool(
+                    ynab.update_transactions, conversion["budget_id"], safe
+                )
     suffix = f"&skipped_splits={skipped_splits}" if skipped_splits else ""
     return RedirectResponse(
         f"/conversions/{conversion_id}?applied={len(updated)}{suffix}", status_code=303
