@@ -36,8 +36,11 @@ def test_privacy_page_is_public(app_client):
 
 def test_footer_has_trademark_disclaimer(app_client):
     response = app_client.get("/privacy")
-    assert "not affiliated" in response.text
-    assert "registered trademarks of YNAB" in response.text
+    # Normalize whitespace so HTML line-wrapping doesn't break the match — the
+    # exact YNAB-required wording matters, not how it's wrapped in the template.
+    text = " ".join(response.text.split())
+    assert "not affiliated, associated, or in any way officially connected" in text
+    assert "registered trademarks of YNAB" in text
     assert 'href="/privacy"' in response.text
 
 
