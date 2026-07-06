@@ -79,6 +79,125 @@ def mock_budgets(iso_code="USD"):
     )
 
 
+def mock_two_budgets():
+    return respx.get(f"{YNAB}/budgets").mock(
+        return_value=Response(200, json={"data": {"budgets": [
+            {"id": "b1", "name": "My Budget", "currency_format": {"iso_code": "USD"}},
+            {"id": "b2", "name": "Other Plan", "currency_format": {"iso_code": "USD"}},
+        ]}})
+    )
+
+
+def create_conversion(client, token, account_id, account_name,
+                      budget_id="b1", budget_name="My Budget", from_currency="JPY"):
+    response = client.post("/conversions", data={
+        "budget_id": budget_id, "budget_name": budget_name,
+        "account_id": account_id, "account_name": account_name,
+        "from_currency": from_currency, "to_currency": "USD",
+        "start_date": "2024-01-01", "csrf_token": token,
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    return response.headers["location"].rsplit("/", 1)[-1]
+
+
+@respx.mock
+def test_index_sorting(app_client):
+    mock_budgets()
+    token = login(app_client)
+    create_conversion(app_client, token, "a1", "Zebra")
+    create_conversion(app_client, token, "a2", "Alpha")
+
+    # default order is insertion order (Zebra was created first)
+    default = app_client.get("/conversions").text
+    assert default.index("Zebra") < default.index("Alpha")
+
+    # ascending by account name flips them and marks the active column
+    asc = app_client.get("/conversions?sort=account&order=asc").text
+    assert asc.index("Alpha") < asc.index("Zebra")
+    assert "▲" in asc
+    # the header link now offers the opposite direction
+    assert "sort=account&order=desc" in asc
+
+    desc = app_client.get("/conversions?sort=account&order=desc").text
+    assert desc.index("Zebra") < desc.index("Alpha")
+    assert "▼" in desc
+
+    # an unknown sort key is ignored, not a 500
+    assert app_client.get("/conversions?sort=bogus").status_code == 200
+
+
+@respx.mock
+def test_plan_column_collapses_to_single_plan(app_client):
+    mock_two_budgets()
+    token = login(app_client)
+    create_conversion(app_client, token, "a1", "Japan Trip")
+
+    # one plan → the Plan column is hidden and a note names it instead
+    single = app_client.get("/conversions").text
+    assert "sort=plan" not in single
+    assert "All conversions are in" in single
+
+    # a second conversion in a different plan brings the column back
+    create_conversion(app_client, token, "a2", "Europe Trip",
+                      budget_id="b2", budget_name="Other Plan")
+    multi = app_client.get("/conversions").text
+    assert "sort=plan" in multi
+    assert "Other Plan" in multi
+    assert "All conversions are in" not in multi
+
+
+@respx.mock
+def test_bulk_delete(app_client):
+    mock_budgets()
+    token = login(app_client)
+    japan = create_conversion(app_client, token, "a1", "Japan Trip")
+    europe = create_conversion(app_client, token, "a2", "Europe Trip")
+    asia = create_conversion(app_client, token, "a3", "Asia Trip")
+
+    # missing CSRF is rejected before anything is deleted
+    assert app_client.post(
+        "/conversions/bulk-delete", data={"ids": [japan]}
+    ).status_code == 403
+
+    response = app_client.post("/conversions/bulk-delete", data={
+        "ids": [japan, europe], "csrf_token": token,
+    }, follow_redirects=False)
+    assert response.status_code == 303
+
+    remaining = app_client.get("/conversions").text
+    assert "Japan Trip" not in remaining
+    assert "Europe Trip" not in remaining
+    assert "Asia Trip" in remaining
+    # a bulk-delete with no ids is a harmless no-op
+    assert app_client.post(
+        "/conversions/bulk-delete", data={"csrf_token": token}, follow_redirects=False
+    ).status_code == 303
+    assert "Asia Trip" in app_client.get("/conversions").text
+    _ = asia
+
+
+@respx.mock
+def test_last_synced_recorded_on_preview(app_client):
+    from datetime import date
+
+    mock_budgets()
+    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": []}})
+    )
+    token = login(app_client)
+    conversion_id = create_conversion(app_client, token, "a1", "Japan Trip")
+
+    # never synced yet
+    assert "never" in app_client.get("/conversions").text
+    assert "never" in app_client.get(f"/conversions/{conversion_id}").text
+
+    app_client.post(f"/conversions/{conversion_id}/preview", data={"csrf_token": token})
+
+    today = date.today().isoformat()
+    assert today in app_client.get(f"/conversions/{conversion_id}").text
+    assert today in app_client.get("/conversions").text
+
+
 def test_security_headers_present(app_client):
     response = app_client.get("/login")
     assert response.headers["X-Frame-Options"] == "DENY"

@@ -16,6 +16,7 @@
     <dt>Plan</dt><dd>{{ conversion.budget_name }}</dd>
     <dt>Conversion</dt><dd>{{ conversion.from_currency }} → {{ conversion.to_currency }}</dd>
     <dt>Start date</dt><dd>{{ conversion.start_date }}</dd>
+    <dt>Last synced</dt><dd>{{ conversion.last_synced or "never" }}</dd>
   </dl>
   <form method="post" action="/conversions/{{ conversion.id }}/preview">
     {{ csrf_input(request) }}

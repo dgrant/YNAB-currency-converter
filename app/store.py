@@ -4,6 +4,8 @@ from pathlib import Path
 
 from . import db
 
+# User-editable fields, written by add()/update(). last_synced is managed
+# separately (mark_synced) since it's set by preview/apply, not the form.
 _FIELDS = (
     "budget_id",
     "budget_name",
@@ -16,7 +18,7 @@ _FIELDS = (
 
 
 def _row_to_dict(row) -> dict:
-    return {key: row[key] for key in ("id", *_FIELDS)}
+    return {**{key: row[key] for key in ("id", *_FIELDS)}, "last_synced": row["last_synced"]}
 
 
 class ConversionStore:
@@ -77,6 +79,18 @@ class ConversionStore:
         finally:
             conn.close()
         return updated
+
+    def mark_synced(self, user_id: str, conversion_id: str, when: str) -> None:
+        """Record that this conversion was just previewed/applied against YNAB."""
+        conn = db.connect(self.data_dir)
+        try:
+            conn.execute(
+                "UPDATE conversions SET last_synced = ? WHERE user_id = ? AND id = ?",
+                (when, user_id, conversion_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     def delete(self, user_id: str, conversion_id: str) -> None:
         conn = db.connect(self.data_dir)

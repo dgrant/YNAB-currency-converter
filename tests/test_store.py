@@ -50,6 +50,29 @@ def test_update(tmp_path):
     assert store.update(user.id, "missing", {"start_date": "2024-06-01"}) is None
 
 
+def test_mark_synced(tmp_path):
+    user = make_user(tmp_path)
+    store = ConversionStore(tmp_path)
+    conversion = store.add(user.id, CONVERSION)
+    # a fresh conversion has never been synced
+    assert store.get(user.id, conversion["id"])["last_synced"] is None
+
+    store.mark_synced(user.id, conversion["id"], "2026-07-06")
+    assert store.get(user.id, conversion["id"])["last_synced"] == "2026-07-06"
+    # updating editable fields leaves last_synced untouched
+    store.update(user.id, conversion["id"], {"start_date": "2024-06-01"})
+    assert store.get(user.id, conversion["id"])["last_synced"] == "2026-07-06"
+
+
+def test_mark_synced_is_scoped(tmp_path):
+    alice = make_user(tmp_path, "alice@example.com")
+    bob = make_user(tmp_path, "bob@example.com")
+    store = ConversionStore(tmp_path)
+    conversion = store.add(alice.id, CONVERSION)
+    store.mark_synced(bob.id, conversion["id"], "2026-07-06")  # scoped no-op
+    assert store.get(alice.id, conversion["id"])["last_synced"] is None
+
+
 def test_scoping_between_users(tmp_path):
     alice = make_user(tmp_path, "alice@example.com")
     bob = make_user(tmp_path, "bob@example.com")

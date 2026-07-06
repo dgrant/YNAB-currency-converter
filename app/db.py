@@ -33,11 +33,26 @@ CREATE TABLE IF NOT EXISTS conversions (
     account_name  TEXT NOT NULL,
     from_currency TEXT NOT NULL,
     to_currency   TEXT NOT NULL,
-    start_date    TEXT NOT NULL
+    start_date    TEXT NOT NULL,
+    last_synced   TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_conversions_user ON conversions(user_id);
 """
+
+# Columns added after the table first shipped. CREATE TABLE IF NOT EXISTS won't
+# touch an existing table, so bring older DBs up to date with idempotent
+# ALTERs. Each entry is (table, column, definition).
+_MIGRATIONS = (
+    ("conversions", "last_synced", "TEXT"),
+)
+
+
+def _apply_migrations(conn: sqlite3.Connection) -> None:
+    for table, column, definition in _MIGRATIONS:
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def db_path(data_dir: Path) -> Path:
@@ -59,6 +74,7 @@ def init(data_dir: Path) -> None:
     conn = connect(data_dir)
     try:
         conn.executescript(SCHEMA)
+        _apply_migrations(conn)
         conn.commit()
     finally:
         conn.close()

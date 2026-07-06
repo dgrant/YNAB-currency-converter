@@ -120,10 +120,12 @@ review's prerequisites, each as its own task:
 - [ ] **Crypto / non-ECB currencies.** Frankfurter is ~30 fiat currencies
       (ECB data). Add a second rate source behind the `RateTable` interface
       (e.g. CoinGecko for crypto) and pick per conversion.
-- [ ] **Last-synced date per account.** Show when each conversion was last
-      previewed/applied, stored per conversion. Overlaps with "Auto-advance
-      `start_date`" and "Show pending counts" — a `last_synced` field feeds
-      all three.
+- [x] **Last-synced date per account.** Done (2026-07): a `last_synced`
+      column on `conversions` (nullable; `db._apply_migrations` ALTER-adds it to
+      existing DBs), set to today's date by both preview and apply
+      (`store.mark_synced`). Shown on the index list ("never" until first sync)
+      and the detail page. This is the shared field the "Auto-advance
+      `start_date`" and "Show pending counts" items can build on.
 - [ ] **Batch-create conversions for multiple accounts at once.** Today each
       conversion is set up one account at a time. Add a bulk setup flow that
       lists all accounts (minus those already configured) and lets the user
@@ -206,15 +208,22 @@ review's prerequisites, each as its own task:
 - [x] **Post-apply flash instead of a bare page.** Done: apply redirects to
       the detail page with `?applied=N` and a flash; `applied.html` removed.
 - [x] **Dark mode.** Done (`prefers-color-scheme` variables in `style.css`).
-- [ ] **Sort the conversions list.** Let the user order the index list
-      (by account name, plan, currency, last-synced, pending count…) instead
-      of the fixed order it renders in today.
-- [ ] **Collapse the plan column when there's only one plan.** The plan
-      column eats horizontal space; hide it (or move it to a header/caption)
-      when every conversion is in the same plan.
-- [ ] **Bulk-delete via row checkboxes instead of a per-row Delete button.**
-      The per-row Delete button takes up space; replace it with a checkbox per
-      row plus a bulk "Delete selected" action. (Keep CSRF + the confirm.)
+- [x] **Sort the conversions list.** Done (2026-07): clickable column headers
+      on the index (`?sort=account|plan|currency|start|synced&order=asc|desc`)
+      with an active-direction arrow; server-side sort in the index route
+      (`_SORT_KEYS`). No sort param keeps the default insertion order. Pending
+      count isn't a column yet, so it's not a sort key.
+- [x] **Collapse the plan column when there's only one plan.** Done (2026-07):
+      the index hides the Plan column when every conversion shares a
+      `budget_name` (`single_plan`) and shows a "All conversions are in ‹plan›"
+      caption instead; the column (and its sort header) return as soon as a
+      second plan appears.
+- [x] **Bulk-delete via row checkboxes instead of a per-row Delete button.**
+      Done (2026-07): the index row Delete button is replaced by a checkbox per
+      row (plus a select-all) and a "Delete selected" action posting to
+      `/conversions/bulk-delete` (per-id scoped deletes, CSRF-protected, JS
+      confirm). The button stays disabled until a row is checked. The
+      per-conversion Delete on the detail page is unchanged.
 - [x] **Confirm password on the sign-up page.** Done (2026-07): second
       password field on `/signup`, checked client-side (`setCustomValidity`)
       and server-side (400 on mismatch, before the user row is created).

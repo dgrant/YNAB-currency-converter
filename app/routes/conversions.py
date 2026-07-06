@@ -59,14 +59,41 @@ def get_rates_client() -> FrankfurterClient:
     return _rates_client
 
 
+# Sort keys for the conversions list, mapped to a stable sort function. Missing
+# last_synced sorts as empty string (so never-synced rows group together).
+_SORT_KEYS = {
+    "account": lambda c: (c["account_name"] or "").lower(),
+    "plan": lambda c: (c["budget_name"] or "").lower(),
+    "currency": lambda c: (c["from_currency"], c["to_currency"]),
+    "start": lambda c: c["start_date"],
+    "synced": lambda c: c["last_synced"] or "",
+}
+
+
 @router.get("/conversions")
-def index(request: Request, user: User = Depends(require_login)):
+def index(
+    request: Request,
+    user: User = Depends(require_login),
+    sort: str = "",
+    order: str = "asc",
+):
     settings = get_settings()
     has_ynab = ConnectionStore(settings.data_dir).get(user.id) is not None
+    conversions = get_store().load(user.id)
+    if sort in _SORT_KEYS:
+        conversions.sort(key=_SORT_KEYS[sort], reverse=(order == "desc"))
+    # The plan column is noise when every conversion lives in the same plan.
+    single_plan = len({c["budget_name"] for c in conversions}) <= 1
     return templates.TemplateResponse(
         request,
         "index.html",
-        {"conversions": get_store().load(user.id), "has_ynab": has_ynab},
+        {
+            "conversions": conversions,
+            "has_ynab": has_ynab,
+            "sort": sort if sort in _SORT_KEYS else "",
+            "order": "desc" if order == "desc" else "asc",
+            "single_plan": single_plan,
+        },
     )
 
 
@@ -270,6 +297,19 @@ def edit(
     return RedirectResponse(f"/conversions/{conversion_id}", status_code=303)
 
 
+@router.post("/conversions/bulk-delete")
+def bulk_delete(
+    user: User = Depends(require_login),
+    ids: list[str] = Form(default=[]),
+):
+    """Delete several conversions at once from the index page's row checkboxes.
+    A scoped delete per id, so any id not owned by the user is a silent no-op."""
+    store = get_store()
+    for conversion_id in ids:
+        store.delete(user.id, conversion_id)
+    return RedirectResponse("/conversions", status_code=303)
+
+
 @router.post("/conversions/{conversion_id}/delete")
 def delete(conversion_id: str, user: User = Depends(require_login)):
     get_store().delete(user.id, conversion_id)
@@ -287,6 +327,7 @@ def preview(
     transactions = ynab.get_transactions(
         conversion["budget_id"], conversion["account_id"], conversion["start_date"]
     )
+    get_store().mark_synced(user.id, conversion_id, date.today().isoformat())
     pending, skipped_splits = [], 0
     skipped_marked = [
         {"payee_name": t.get("payee_name") or "", "date": t["date"]}
@@ -396,6 +437,7 @@ async def apply(
                 conversion["account_id"],
                 conversion["start_date"],
             )
+            get_store().mark_synced(user.id, conversion_id, date.today().isoformat())
             current_by_id = {t["id"]: t for t in current}
             present_ids = set(current_by_id)
             split_ids = {tid for tid, t in current_by_id.items() if is_split(t)}
