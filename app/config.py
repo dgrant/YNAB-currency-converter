@@ -26,7 +26,7 @@ class Settings:
         self.ynab_client_id = os.environ.get("YNAB_CLIENT_ID", "")
         self.ynab_client_secret = os.environ.get("YNAB_CLIENT_SECRET", "")
         self.ynab_oauth_base = os.environ.get("YNAB_OAUTH_BASE", "https://app.ynab.com")
-        # Public origin (e.g. https://ynabfx.davidgrant.ca) used to build the
+        # Public origin (e.g. https://fxforynab.davidgrant.ca) used to build the
         # OAuth redirect URI behind the reverse proxy; derived from the
         # request when unset.
         self.public_base_url = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
