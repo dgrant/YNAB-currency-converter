@@ -22,6 +22,8 @@ _ERRORS = {
     "denied": "YNAB authorization was cancelled or denied — nothing was connected.",
     "reauth": "Your YNAB connection predates OAuth-only support and had to be "
     "cleared — please reconnect.",
+    "revoked": "YNAB rejected the connection as unauthorized (the access was "
+    "likely revoked from YNAB's settings, or the token expired). Please reconnect.",
 }
 
 
