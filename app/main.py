@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exception_handlers import http_exception_handler
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
@@ -105,6 +105,15 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(YNABError)
     async def ynab_error(request: Request, exc: YNABError) -> Response:
+        if exc.status_code == 401:
+            # A documented YNAB 401 means the access token is invalid, expired,
+            # or revoked (https://api.ynab.com/#errors). get_access_token
+            # refreshes proactively before expiry, so a 401 on a data call
+            # almost always means the user revoked the grant in YNAB — a generic
+            # "try again shortly" is wrong here. Send them to /settings to
+            # reconnect. Nothing was written (the 401 aborts the request), and
+            # reconnecting via OAuth upserts a fresh token over the dead one.
+            return RedirectResponse("/settings?error=revoked", status_code=303)
         if exc.status_code == 429:
             return _error_page(
                 request,
