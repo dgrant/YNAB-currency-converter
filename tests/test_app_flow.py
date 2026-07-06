@@ -262,6 +262,9 @@ def test_already_in_budget_currency_and_skip_actions(app_client):
     assert "is excluded" in preview.text
     assert "Old reconciliation (2024-01-05)" in preview.text
     assert 'name="action_t1"' in preview.text
+    # the action options lead with the budget currency ("Already USD")
+    assert "Already USD (memo ≈331,754 JPY)" in preview.text
+    assert "Already USD (skip forever)" in preview.text
     # 2,919 USD / 0.0087987 = 331,754 JPY offered as the already-USD memo
     assert 'name="already_memo_t1" value="≈ 331,754 JPY (FX rate: 0.0087987)"' in preview.text
     assert 'name="skip_memo_t2" value="(skipped)"' in preview.text

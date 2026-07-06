@@ -160,8 +160,9 @@ tbody tr:last-child td { border-bottom: none; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 td.memo { color: var(--muted); max-width: 16rem; overflow-wrap: anywhere; }
 /* fixed width: inside the scrollable mobile table the cell would otherwise
-   squeeze the select down to a few pixels */
-td.action select { width: 9.5rem; font-size: 0.85rem; }
+   squeeze the select down to a few pixels. Wide enough that the leading
+   "Already <CUR>" stays visible when the option is collapsed. */
+td.action select { width: 15rem; max-width: 100%; font-size: 0.85rem; }
 /* action ≠ convert: the rate/converted columns won't be applied */
 tr.no-convert td.fx { opacity: 0.45; text-decoration: line-through; }
 
