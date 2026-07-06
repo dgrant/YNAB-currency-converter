@@ -4,6 +4,13 @@
   <h1>Conversions</h1>
   <a class="button primary" href="/conversions/new">New conversion</a>
 </div>
+{% if not has_ynab %}
+<div class="card">
+  <p><strong>Connect your YNAB account first.</strong> The app needs access to
+     YNAB to read transactions and write converted amounts.</p>
+  <p><a class="button primary" href="/settings">Connect YNAB</a></p>
+</div>
+{% endif %}
 {% if conversions %}
 <table>
   <thead>

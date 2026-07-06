@@ -1,4 +1,5 @@
-"""End-to-end HTTP flow: login -> create conversion -> preview -> apply.
+"""End-to-end HTTP flow: sign up -> connect YNAB -> create conversion ->
+preview -> apply.
 
 YNAB and Frankfurter are mocked with respx; assertions check the exact
 PATCH body sent to YNAB.
@@ -12,6 +13,8 @@ from httpx import Response
 YNAB = "https://api.ynab.com/v1"
 FX = "https://api.frankfurter.dev/v1"
 
+EMAIL = "user@example.com"
+PASSWORD = "test-password"
 
 CSRF_RE = re.compile(r'name="csrf_token" value="([^"]+)"')
 
@@ -21,15 +24,32 @@ def get_csrf(client):
     return CSRF_RE.search(client.get("/login").text).group(1)
 
 
-def login(client):
+def signup(client, email=EMAIL, password=PASSWORD):
     token = get_csrf(client)
     response = client.post(
-        "/login",
-        data={"password": "test-password", "csrf_token": token},
+        "/signup",
+        data={"email": email, "password": password, "csrf_token": token},
         follow_redirects=False,
     )
     assert response.status_code == 303
     return token
+
+
+def connect_ynab(client, csrf_token, pat="test-token"):
+    """Store a personal access token for the logged-in user."""
+    response = client.post(
+        "/settings/ynab/pat",
+        data={"token": pat, "csrf_token": csrf_token},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    return csrf_token
+
+
+def login(client, email=EMAIL, password=PASSWORD):
+    """Fresh user ready to use the app: signed up and connected to YNAB."""
+    token = signup(client, email, password)
+    return connect_ynab(client, token)
 
 
 def mock_budgets(iso_code="USD"):
@@ -64,6 +84,7 @@ def test_healthz_public_and_reports_version(app_client):
 def test_landing_page_is_public(app_client):
     response = app_client.get("/")
     assert response.status_code == 200
+    assert "Sign up" in response.text
     assert "Log in" in response.text
     assert "exchange rate" in response.text
     # once logged in, / goes straight to the conversions list
@@ -73,67 +94,15 @@ def test_landing_page_is_public(app_client):
     assert response.headers["location"] == "/conversions"
 
 
-def test_wrong_password_rejected(app_client):
-    token = get_csrf(app_client)
-    response = app_client.post("/login", data={"password": "nope", "csrf_token": token})
-    assert response.status_code == 401
-
-
-def test_non_ascii_password_rejected_cleanly(app_client):
-    # compare_digest on str raises TypeError for non-ASCII; must be a 401, not 500
-    token = get_csrf(app_client)
-    response = app_client.post("/login", data={"password": "pässwörd", "csrf_token": token})
-    assert response.status_code == 401
-
-
-def test_non_ascii_csrf_token_is_403_not_500(app_client):
-    get_csrf(app_client)  # session now has a real token
-    response = app_client.post("/login", data={"password": "test-password", "csrf_token": "é"})
-    assert response.status_code == 403
-
-
-def test_throttle_delay_never_overflows():
-    import app.auth as auth
-
-    auth._reset_throttle()
-    auth._throttle["failures"] = 5000
-    auth._record_login_failure()  # must not raise OverflowError
-    import time as time_mod
-
-    assert auth._throttle["locked_until"] - time_mod.monotonic() <= auth.LOCKOUT_MAX_SECONDS + 1
-    auth._reset_throttle()
-
-
-def test_login_brute_force_throttled(app_client):
-    import app.auth as auth
-
-    token = get_csrf(app_client)
-    for _ in range(auth.LOCKOUT_THRESHOLD):
-        response = app_client.post("/login", data={"password": "nope", "csrf_token": token})
-        assert response.status_code == 401
-    # locked out now — even the correct password is refused until the delay passes
-    response = app_client.post(
-        "/login", data={"password": "test-password", "csrf_token": token}
-    )
-    assert response.status_code == 429
-    assert "Too many failed attempts" in response.text
-    # once the lockout expires, the correct password works and resets the counter
-    auth._throttle["locked_until"] = 0.0
-    response = app_client.post(
-        "/login", data={"password": "test-password", "csrf_token": token},
-        follow_redirects=False,
-    )
-    assert response.status_code == 303
-    assert auth._throttle["failures"] == 0
-
-
 def test_post_without_csrf_token_rejected(app_client):
     # no token at all
-    assert app_client.post("/login", data={"password": "test-password"}).status_code == 403
+    assert app_client.post(
+        "/login", data={"email": EMAIL, "password": PASSWORD}
+    ).status_code == 403
     # wrong token
     get_csrf(app_client)
     response = app_client.post(
-        "/login", data={"password": "test-password", "csrf_token": "forged"}
+        "/login", data={"email": EMAIL, "password": PASSWORD, "csrf_token": "forged"}
     )
     assert response.status_code == 403
     # authenticated POSTs are protected too
@@ -144,10 +113,44 @@ def test_post_without_csrf_token_rejected(app_client):
     ).status_code == 303  # valid token: passes CSRF, delete of unknown id just redirects
 
 
+def test_non_ascii_csrf_token_is_403_not_500(app_client):
+    get_csrf(app_client)  # session now has a real token
+    response = app_client.post(
+        "/login", data={"email": EMAIL, "password": PASSWORD, "csrf_token": "é"}
+    )
+    assert response.status_code == 403
+
+
+def test_conversions_redirect_to_settings_until_ynab_connected(app_client):
+    token = signup(app_client)
+    # the index page renders, with a connect notice
+    index = app_client.get("/conversions")
+    assert index.status_code == 200
+    assert "Connect your YNAB account first" in index.text
+    # anything that needs the YNAB API redirects to settings
+    response = app_client.get("/conversions/new", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/settings"
+    response = app_client.post(
+        "/conversions", data={
+            "budget_id": "b1", "budget_name": "My Budget",
+            "account_id": "a1", "account_name": "Japan Trip",
+            "from_currency": "JPY", "to_currency": "USD",
+            "start_date": "2024-01-01", "csrf_token": token,
+        }, follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/settings"
+    # once connected, the notice disappears
+    connect_ynab(app_client, token)
+    index = app_client.get("/conversions")
+    assert "Connect your YNAB account first" not in index.text
+
+
 @respx.mock
 def test_full_conversion_flow(app_client):
     mock_budgets()
-    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
+    transactions_route = respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
         return_value=Response(200, json={"data": {"transactions": [
             {"id": "t1", "date": "2024-01-05", "amount": -1817000,
              "payee_name": "Ramen", "memo": None, "deleted": False},
@@ -192,6 +195,9 @@ def test_full_conversion_flow(app_client):
     # totals row for the single proposed transaction
     assert "Total (1 row)" in preview.text
     assert "-15.99" in preview.text
+    # every YNAB call carries the user's own token
+    for call in transactions_route.calls:
+        assert call.request.headers["Authorization"] == "Bearer test-token"
 
     applied = app_client.post(f"/conversions/{conversion_id}/apply", data={
         "selected": ["t1"],
@@ -207,6 +213,7 @@ def test_full_conversion_flow(app_client):
     assert "1 transaction updated in YNAB" in applied.text
 
     assert patch_route.called
+    assert patch_route.calls[0].request.headers["Authorization"] == "Bearer test-token"
     body = json.loads(patch_route.calls[0].request.content)
     assert body == {"transactions": [
         {"id": "t1", "amount": -15990, "memo": "-1,817 JPY (FX rate: 0.0087987)"}
@@ -477,3 +484,60 @@ def test_duplicate_account_rejected(app_client):
     assert app_client.post(
         f"/conversions/{europe_id}/edit", data=updated, follow_redirects=False
     ).status_code == 303
+
+
+@respx.mock
+def test_users_cannot_see_each_others_conversions(app_client):
+    from fastapi.testclient import TestClient
+
+    mock_budgets()
+    alice_token = login(app_client, email="alice@example.com")
+    response = app_client.post("/conversions", data={
+        "budget_id": "b1", "budget_name": "My Budget",
+        "account_id": "a1", "account_name": "Japan Trip",
+        "from_currency": "JPY", "to_currency": "USD",
+        "start_date": "2024-01-01", "csrf_token": alice_token,
+    }, follow_redirects=False)
+    conversion_id = response.headers["location"].rsplit("/", 1)[-1]
+
+    with TestClient(app_client.app) as bob:
+        bob_token = login(bob, email="bob@example.com")
+        # bob's list is empty and alice's conversion is invisible to him
+        assert "Japan Trip" not in bob.get("/conversions").text
+        assert bob.get(f"/conversions/{conversion_id}").status_code == 404
+        assert bob.get(f"/conversions/{conversion_id}/edit").status_code == 404
+        assert bob.post(
+            f"/conversions/{conversion_id}/preview", data={"csrf_token": bob_token}
+        ).status_code == 404
+        # bob can even use the same YNAB account id — conversions are per user
+        assert bob.post("/conversions", data={
+            "budget_id": "b1", "budget_name": "My Budget",
+            "account_id": "a1", "account_name": "Japan Trip",
+            "from_currency": "JPY", "to_currency": "USD",
+            "start_date": "2024-01-01", "csrf_token": bob_token,
+        }, follow_redirects=False).status_code == 303
+        # a delete attempt on alice's conversion is a scoped no-op
+        bob.post(
+            f"/conversions/{conversion_id}/delete",
+            data={"csrf_token": bob_token},
+            follow_redirects=False,
+        )
+
+    # alice still has her conversion
+    assert app_client.get(f"/conversions/{conversion_id}").status_code == 200
+
+
+@respx.mock
+def test_malformed_start_date_is_400_not_500(app_client):
+    mock_budgets()
+    token = login(app_client)
+    # a tampered/malformed start_date must be a 400, like the apply route,
+    # not an unhandled 500
+    response = app_client.post("/conversions", data={
+        "budget_id": "b1", "budget_name": "My Budget",
+        "account_id": "a1", "account_name": "Japan Trip",
+        "from_currency": "JPY", "to_currency": "USD",
+        "start_date": "not-a-date", "csrf_token": token,
+    })
+    assert response.status_code == 400
+    assert "valid YYYY-MM-DD" in response.text

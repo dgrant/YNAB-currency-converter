@@ -58,6 +58,17 @@ nav {
   text-decoration: none;
 }
 
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.nav-links a {
+  color: var(--fg);
+  text-decoration: none;
+}
+
 main {
   max-width: 960px;
   margin: 2rem auto;
