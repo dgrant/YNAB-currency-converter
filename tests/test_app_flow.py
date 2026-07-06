@@ -509,6 +509,12 @@ def test_users_cannot_see_each_others_conversions(app_client):
         assert bob.post(
             f"/conversions/{conversion_id}/preview", data={"csrf_token": bob_token}
         ).status_code == 404
+        # apply is the one route that writes to YNAB — lock its IDOR guard too
+        assert bob.post(f"/conversions/{conversion_id}/apply", data={
+            "selected": ["t1"], "action_t1": "skip", "original_t1": "-1000",
+            "amount_t1": "-1", "memo_t1": "x", "skip_memo_t1": "(skipped)",
+            "csrf_token": bob_token,
+        }).status_code == 404
         # bob can even use the same YNAB account id — conversions are per user
         assert bob.post("/conversions", data={
             "budget_id": "b1", "budget_name": "My Budget",

@@ -103,6 +103,12 @@ in at image build time (`ARG GIT_SHA`, exported by `autodeploy.sh`), so this
 answers "what's live" without SSH; the page footer shows it too.
 
 Docker Compose; the container binds to **127.0.0.1:8000** (not public).
+**Single uvicorn worker (no `--workers`) is a correctness assumption, not just a
+resource choice:** the per-conversion apply lock (`_apply_locks` in
+`routes/conversions.py`) and the OAuth token-refresh locks (`_refresh_locks` in
+`oauth.py`) are in-process; adding workers would break the double-submit and
+refresh-rotation serialization they provide. Don't add `--workers` without moving
+that coordination to a shared store.
 Server: David's Linode (Debian 12), app at `~/YNAB-currency-converter`,
 fronted by host nginx (vhost `/etc/nginx/sites-available/ynabfx.davidgrant.ca`
 → `proxy_pass http://127.0.0.1:8000`) with a certbot Let's Encrypt cert

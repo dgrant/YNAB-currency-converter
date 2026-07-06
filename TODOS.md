@@ -113,6 +113,17 @@ each as its own task:
 
 ## Correctness & robustness
 
+- [ ] **Don't block the event loop with sync YNAB calls in async handlers.**
+      `apply()` is `async def` but calls the synchronous `YNABClient`
+      (`httpx.Client`) for `get_transactions` + `update_transactions` without
+      awaiting, so one user's apply blocks the single event loop — and thus
+      every other user's request — for up to two sequential ~30s YNAB
+      round-trips. Pre-existing, but the multi-user merge turned a self-inflicted
+      stall into cross-tenant availability coupling. Fix: wrap the blocking calls
+      in `await run_in_threadpool(...)` (or make `YNABClient` async). Note this
+      also makes the `_apply_lock` in `apply()` actually necessary — today the
+      sync I/O already prevents interleaving, so the lock is a no-op guard that
+      only starts doing real work once the I/O yields.
 - [x] **One conversion per account.** Done: the new/edit forms disable
       accounts that already have a conversion, and create/edit reject
       duplicates server-side with a 409.

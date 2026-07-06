@@ -30,6 +30,11 @@ def app_client_factory(tmp_path, monkeypatch):
 
         monkeypatch.setattr(config, "_settings", None)
         monkeypatch.setattr(conversions_routes, "_rates_client", None)
+        # Fresh per-conversion apply locks each test: an asyncio.Lock is bound
+        # to the event loop it was created on, and every test builds a new
+        # TestClient (new loop), so a cached lock would raise "bound to a
+        # different event loop" if a conversion_id ever recurred.
+        monkeypatch.setattr(conversions_routes, "_apply_locks", {})
         monkeypatch.setattr(ynab_mod, "_pooled_client", None)
 
         import app.http as app_http
