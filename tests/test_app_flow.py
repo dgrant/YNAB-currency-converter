@@ -29,7 +29,12 @@ def signup(client, email=EMAIL, password=PASSWORD):
     token = get_csrf(client)
     response = client.post(
         "/signup",
-        data={"email": email, "password": password, "csrf_token": token},
+        data={
+            "email": email,
+            "password": password,
+            "password_confirm": password,
+            "csrf_token": token,
+        },
         follow_redirects=False,
     )
     assert response.status_code == 303

@@ -10,8 +10,21 @@
     <input type="email" id="email" name="email" value="{{ email }}" autofocus required>
     <label for="password">Password (at least 8 characters)</label>
     <input type="password" id="password" name="password" minlength="8" required>
+    <label for="password_confirm">Confirm password</label>
+    <input type="password" id="password_confirm" name="password_confirm" minlength="8" required>
     <button type="submit" class="primary">Create account</button>
   </form>
+  <script>
+    const password = document.getElementById("password");
+    const confirm = document.getElementById("password_confirm");
+    function checkMatch() {
+      confirm.setCustomValidity(
+        confirm.value && confirm.value !== password.value ? "Passwords do not match." : ""
+      );
+    }
+    password.addEventListener("input", checkMatch);
+    confirm.addEventListener("input", checkMatch);
+  </script>
   <p class="hint">Already have an account? <a href="/login">Log in</a>.</p>
 </div>
 {% endblock %}
