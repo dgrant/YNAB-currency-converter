@@ -114,12 +114,27 @@ review's prerequisites, each as its own task:
       per-user YNAB credentials (OAuth — the PAT path was removed 2026-07),
       conversions scoped by `user_id`, all in SQLite (`data/app.db` — users,
       ynab_connections, conversions). `python -m app.import_legacy <email>`
-      migrates a v1 deployment. Follow-ups worth considering: password reset
-      (needs outbound email), account deletion, and signup abuse controls if
-      it's ever opened up beyond friends & family.
+      migrates a v1 deployment. Follow-ups worth considering: account
+      deletion (password reset is now its own task below) and signup abuse
+      controls if it's ever opened up beyond friends & family.
 - [ ] **Crypto / non-ECB currencies.** Frankfurter is ~30 fiat currencies
       (ECB data). Add a second rate source behind the `RateTable` interface
       (e.g. CoinGecko for crypto) and pick per conversion.
+- [ ] **Last-synced date per account.** Show when each conversion was last
+      previewed/applied, stored per conversion. Overlaps with "Auto-advance
+      `start_date`" and "Show pending counts" — a `last_synced` field feeds
+      all three.
+- [ ] **Batch-create conversions for multiple accounts at once.** Today each
+      conversion is set up one account at a time. Add a bulk setup flow that
+      lists all accounts (minus those already configured) and lets the user
+      create conversions for several at once in a single form.
+- [ ] **Auto-guess the currency from the account name.** When creating a
+      conversion, if a currency code/word (e.g. "USD") appears in the account
+      name, default the currency select/combobox to it. Just a smart default;
+      still user-editable.
+- [ ] **Password reset.** Self-service reset flow (needs outbound email — see
+      the notifications/scheduler email work). Noted as a follow-up under the
+      multi-user item; breaking it out as its own task.
 
 ## Correctness & robustness
 
@@ -134,6 +149,11 @@ review's prerequisites, each as its own task:
       also makes the `_apply_lock` in `apply()` actually necessary — today the
       sync I/O already prevents interleaving, so the lock is a no-op guard that
       only starts doing real work once the I/O yields.
+- [ ] **Derive the plan currency instead of letting the user set it.** We
+      currently let the user pick the target/plan currency on the conversion
+      form. YNAB knows the plan's currency (`budget_settings.currency_format`
+      / `iso_code` — already fetched to validate direction on create). Fetch it
+      and use it directly rather than asking, so the two can't disagree.
 - [x] **One conversion per account.** Done: the new/edit forms disable
       accounts that already have a conversion, and create/edit reject
       duplicates server-side with a 409.
@@ -188,6 +208,17 @@ review's prerequisites, each as its own task:
 - [x] **Post-apply flash instead of a bare page.** Done: apply redirects to
       the detail page with `?applied=N` and a flash; `applied.html` removed.
 - [x] **Dark mode.** Done (`prefers-color-scheme` variables in `style.css`).
+- [ ] **Sort the conversions list.** Let the user order the index list
+      (by account name, plan, currency, last-synced, pending count…) instead
+      of the fixed order it renders in today.
+- [ ] **Collapse the plan column when there's only one plan.** The plan
+      column eats horizontal space; hide it (or move it to a header/caption)
+      when every conversion is in the same plan.
+- [ ] **Bulk-delete via row checkboxes instead of a per-row Delete button.**
+      The per-row Delete button takes up space; replace it with a checkbox per
+      row plus a bulk "Delete selected" action. (Keep CSRF + the confirm.)
+- [ ] **Confirm password on the sign-up page.** Require entering the password
+      twice on `/signup` and reject a mismatch client- and server-side.
 
 ## Ops / deployment
 
@@ -228,6 +259,20 @@ review's prerequisites, each as its own task:
       recreatable from memory — a nightly cron copy (`sqlite3 app.db
       ".backup ..."`) to an rclone target is worth doing. (Was: back up
       `conversions.json`.)
+- [ ] **Switch to a real database.** SQLite (stdlib `sqlite3`, no ORM) is
+      fine for friends-and-family scale but a single-file, single-writer store
+      caps concurrency (see the single-worker constraint) and complicates
+      backups/migrations. Consider Postgres behind a thin data layer if usage
+      grows; today `db.py` is the swap point.
+- [ ] **Audit log.** Record security/data-relevant events (login, conversion
+      created/edited/deleted, apply, YNAB connect/disconnect) with user id +
+      timestamp, for debugging and accountability.
+- [ ] **Per-user metrics.** Track e.g. transactions processed/converted per
+      user, conversions configured, last activity — both for insight and to
+      power the admin view below.
+- [ ] **Admin interface.** A minimal admin-only view of users and their
+      activity/metrics — enough to see who's using the site and to help a user
+      who emails in because they're stuck. Needs an admin flag on the user row.
 - [x] **Dependency updates.** Done: `.github/dependabot.yml` (pip + GitHub
       Actions, weekly); CI green = auto-deployable.
 - [x] **Expose the running version.** Done: `GET /healthz` (unauthenticated)
