@@ -21,16 +21,21 @@ not break (memo marker format, milliunit math, preview→approve contract).
       `-1,817 JPY (FX rate: 0.0087987)` back out, restore the original
       milliunits, strip the marker from the memo. Per-transaction and
       whole-batch undo on the applied page.
-- [ ] **Skip transactions + respect rmillan's `(skipped)` memo marker.**
-      rmillan's site appears to append a `(skipped)` string to the memo of
-      transactions the user chose not to convert (unverified — confirm the
-      exact format first; see the rmillan notes at the bottom for how to
-      test). Two parts: (a) treat memos containing that marker as
-      not-to-convert in `build_preview` (like `MARKER_RE`), otherwise
-      transactions skipped on rmillan's site reappear in every preview here
-      forever; (b) add a "Skip" action in our preview that writes the same
-      marker to the memo, so unticking a transaction can be made permanent.
-      Keep the string byte-compatible with rmillan's, same as the FX marker.
+- [x] **Skip transactions + "already in budget currency" actions.** Done
+      (2026-07): each preview row has an Action select — *Convert* (default),
+      *Memo ≈… (already \<CUR\>)* which keeps the amount and appends the
+      original-currency equivalent with the FX-rate marker, and *Skip forever*
+      which keeps the amount and appends `(skipped)`. Memos containing
+      `(skipped)` are treated as not-to-convert (`is_skipped`,
+      case-insensitive), so transactions skipped on rmillan's site are
+      respected too. Hardened over three review passes: byte-safe
+      marker-preserving memo truncation, zero/NaN-rate guard, stale/edited
+      re-checks at apply time, `| tojson` script escaping. Remaining: confirm
+      the exact rmillan `(skipped)` byte format via a throwaway account (see
+      rmillan notes at the bottom) if strict compatibility matters. Also
+      unverified against the live YNAB API (only mocks): that a memo-only
+      PATCH leaves the amount unchanged, and whether the 500 memo cap counts
+      bytes or characters — the truncation is byte-safe either way.
 - [x] **Edit a conversion.** Done: `/conversions/{id}/edit` (shared
       `conversion_form.html` with the new form), plus Edit/Delete on the
       detail page.
@@ -108,6 +113,17 @@ each as its own task:
 
 ## Correctness & robustness
 
+- [ ] **Don't block the event loop with sync YNAB calls in async handlers.**
+      `apply()` is `async def` but calls the synchronous `YNABClient`
+      (`httpx.Client`) for `get_transactions` + `update_transactions` without
+      awaiting, so one user's apply blocks the single event loop — and thus
+      every other user's request — for up to two sequential ~30s YNAB
+      round-trips. Pre-existing, but the multi-user merge turned a self-inflicted
+      stall into cross-tenant availability coupling. Fix: wrap the blocking calls
+      in `await run_in_threadpool(...)` (or make `YNABClient` async). Note this
+      also makes the `_apply_lock` in `apply()` actually necessary — today the
+      sync I/O already prevents interleaving, so the lock is a no-op guard that
+      only starts doing real work once the I/O yields.
 - [x] **One conversion per account.** Done: the new/edit forms disable
       accounts that already have a conversion, and create/edit reject
       duplicates server-side with a 409.
