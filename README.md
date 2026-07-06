@@ -35,14 +35,10 @@ converted.
 ## Multi-user
 
 Anyone can sign up with email + password. Each user connects their own YNAB
-account, either:
-
-- **OAuth** (recommended): if you register a YNAB OAuth application (free,
-  app.ynab.com → Developer Settings) and set `YNAB_CLIENT_ID` /
-  `YNAB_CLIENT_SECRET`, users get a "Connect to YNAB" button — no API key
-  needed, revocable from YNAB at any time. Tokens refresh automatically.
-- **Personal access token**: always available as a fallback — paste a token
-  from YNAB's Developer Settings on the Settings page.
+account via OAuth: register a YNAB OAuth application (free, app.ynab.com →
+Developer Settings), set `YNAB_CLIENT_ID` / `YNAB_CLIENT_SECRET`, and users
+get a "Connect to YNAB" button — no API key needed, revocable from YNAB at
+any time. Tokens refresh automatically.
 
 ## Running
 

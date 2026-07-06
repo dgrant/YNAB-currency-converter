@@ -159,6 +159,25 @@ def test_conversions_redirect_to_settings_until_ynab_connected(app_client):
     assert "Connect your YNAB account first" not in index.text
 
 
+def test_legacy_connection_is_treated_as_unconnected(app_client):
+    """A pre-OAuth-only row (no refresh_token) must not act as a live credential
+    — require_ynab should redirect to /settings just like having no connection."""
+    from app.config import get_settings
+    from app.connections import ConnectionStore
+    from app.users import UserStore, normalize_email
+
+    signup(app_client)
+    data_dir = get_settings().data_dir
+    user = UserStore(data_dir).get_by_email(normalize_email(EMAIL))
+    ConnectionStore(data_dir)._upsert(user.id, "pat", "legacy-token", None, None)
+
+    response = app_client.get("/conversions/new", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/settings"
+    # the stale row is cleaned up as a side effect, so /settings now shows disconnected
+    assert "Not connected" in app_client.get("/settings").text
+
+
 @respx.mock
 def test_full_conversion_flow(app_client):
     mock_budgets()

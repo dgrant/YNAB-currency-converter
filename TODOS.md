@@ -111,13 +111,12 @@ review's prerequisites, each as its own task:
       to have Restricted Mode removed. Auth is already OAuth-only, which the
       form requires.
 - [x] **Multi-user.** Done (2026-07): email+password signup like rmillan's,
-      per-user YNAB credentials (OAuth or PAT), conversions scoped by
-      `user_id`, all in SQLite (`data/app.db` — users, ynab_connections,
-      conversions). `python -m app.import_legacy <email>` migrates a v1
-      deployment. Follow-ups worth considering: password reset (needs
-      outbound email), account deletion, validating a pasted PAT against
-      `GET /user` at save time, and signup abuse controls if it's ever
-      opened up beyond friends & family.
+      per-user YNAB credentials (OAuth — the PAT path was removed 2026-07),
+      conversions scoped by `user_id`, all in SQLite (`data/app.db` — users,
+      ynab_connections, conversions). `python -m app.import_legacy <email>`
+      migrates a v1 deployment. Follow-ups worth considering: password reset
+      (needs outbound email), account deletion, and signup abuse controls if
+      it's ever opened up beyond friends & family.
 - [ ] **Crypto / non-ECB currencies.** Frankfurter is ~30 fiat currencies
       (ECB data). Add a second rate source behind the `RateTable` interface
       (e.g. CoinGecko for crypto) and pick per conversion.

@@ -169,6 +169,28 @@ def test_settings_connect_and_disconnect(app_client):
     assert "YNAB disconnected" in page.text
 
 
+def test_settings_shows_legacy_connection_needs_reauth(app_client):
+    """A pre-OAuth-only connection (no refresh_token) must not claim 'via OAuth'."""
+    from app.config import get_settings
+    from app.connections import ConnectionStore
+    from app.users import UserStore, normalize_email
+
+    token = signup(app_client)
+    data_dir = get_settings().data_dir
+    user = UserStore(data_dir).get_by_email(normalize_email(EMAIL))
+    ConnectionStore(data_dir)._upsert(user.id, "pat", "legacy-token", None, None)
+
+    page = app_client.get("/settings")
+    assert "Connected to YNAB" in page.text
+    assert "via OAuth" not in page.text
+    assert "needs to be re-authorized" in page.text
+    # disconnect still works for a legacy row
+    response = app_client.post(
+        "/settings/ynab/disconnect", data={"csrf_token": token}, follow_redirects=False
+    )
+    assert response.status_code == 303
+
+
 def test_login_page_redirects_when_already_logged_in(app_client):
     login(app_client)
     for path in ("/login", "/signup"):
