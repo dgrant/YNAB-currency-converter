@@ -96,9 +96,16 @@ each as its own task:
       `budgets`) are left as-is since the API itself calls them budgets. The
       landing headline keeps the verb "Budget in yours." (generic English, not
       the YNAB noun). Nothing implies YNAB endorsement.
-- [ ] **Confirm name uniqueness + logo rules.** App name must not already
-      be on the Works With YNAB list; no YNAB logos except the authorized
-      "Works with YNAB" logo (we use none today — just verify).
+- [x] **Confirm name uniqueness + logo rules.** Done (2026-07): checked the
+      full Works With YNAB list — nothing named "Currency Converter" or with
+      convert/exchange/FX in it; the only currency app is "Multi-currency for
+      YNAB" (ynab.rmillan.com). Renamed the app "YNAB Currency Converter" →
+      "Currency Converter for YNAB" so it follows the "‹Name› for YNAB"
+      pattern instead of leading with the trademark (which can read as
+      official/endorsed), and dropped the landing tagline that duplicated
+      rmillan's exact app name. We use no YNAB logos. If David prefers a
+      different compliant name, change the template titles + nav brand +
+      `main.py` FastAPI title.
 - [ ] **Submit the OAuth App Review form** (Asana) once the above are live,
       to have Restricted Mode removed. Auth is already OAuth-only, which the
       form requires.
