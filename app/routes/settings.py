@@ -1,7 +1,7 @@
 """Account settings: connect/disconnect the user's YNAB credentials."""
 import secrets
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from .. import oauth
@@ -20,7 +20,8 @@ _FLASHES = {
 }
 _ERRORS = {
     "denied": "YNAB authorization was cancelled or denied — nothing was connected.",
-    "empty_token": "Paste a personal access token before saving.",
+    "reauth": "Your YNAB connection predates OAuth-only support and had to be "
+    "cleared — please reconnect.",
 }
 
 
@@ -49,15 +50,6 @@ def settings_page(request: Request, user: User = Depends(require_login)):
             "error": _ERRORS.get(str(request.query_params.get("error"))),
         },
     )
-
-
-@router.post("/settings/ynab/pat")
-def save_pat(user: User = Depends(require_login), token: str = Form(...)):
-    token = token.strip()
-    if not token:
-        return RedirectResponse("/settings?error=empty_token", status_code=303)
-    get_connection_store().set_pat(user.id, token)
-    return RedirectResponse("/settings?ok=connected", status_code=303)
 
 
 @router.post("/settings/ynab/disconnect")

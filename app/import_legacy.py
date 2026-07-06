@@ -4,16 +4,16 @@ Usage (inside the container or venv, with the old .env still loaded):
 
     python -m app.import_legacy you@example.com
 
-Creates a user with that email whose password is the old APP_PASSWORD,
-stores the old YNAB_TOKEN as the user's personal-access-token connection,
-and imports data/conversions.json (preserving conversion ids so existing
-URLs keep working). The JSON file is renamed to conversions.json.imported
-afterwards.
+Creates a user with that email whose password is the old APP_PASSWORD and
+imports data/conversions.json (preserving conversion ids so existing URLs keep
+working). The JSON file is renamed to conversions.json.imported afterwards.
+The imported user connects their YNAB account via OAuth on first sign-in — the
+old single-user YNAB_TOKEN is not migrated (the app is OAuth-only).
 
-The user, connection, and conversions are created in a single transaction:
-if anything fails partway (e.g. a malformed conversion in the JSON), nothing
-is committed, so a re-run starts clean instead of getting stuck on an
-already-created user with no conversions.
+The user and conversions are created in a single transaction: if anything fails
+partway (e.g. a malformed conversion in the JSON), nothing is committed, so a
+re-run starts clean instead of getting stuck on an already-created user with no
+conversions.
 """
 import json
 import sys
@@ -48,12 +48,6 @@ def import_legacy(email: str) -> str:
             "INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)",
             (user_id, email, hash_password(settings.app_password)),
         )
-        if settings.ynab_token:
-            conn.execute(
-                "INSERT INTO ynab_connections (user_id, kind, access_token) "
-                "VALUES (?, 'pat', ?)",
-                (user_id, settings.ynab_token),
-            )
         for conversion in conversions:
             conn.execute(
                 f"INSERT INTO conversions (id, user_id, {', '.join(_FIELDS)}) "
@@ -72,8 +66,8 @@ def import_legacy(email: str) -> str:
 
     return (
         f"Created user {email} (password = old APP_PASSWORD), "
-        f"{'stored YNAB_TOKEN as their connection, ' if settings.ynab_token else ''}"
-        f"imported {len(conversions)} conversion(s)."
+        f"imported {len(conversions)} conversion(s). "
+        "They connect YNAB via OAuth on first sign-in."
     )
 
 

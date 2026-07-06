@@ -1,4 +1,4 @@
-"""Per-user YNAB credentials: a personal access token or OAuth token pair."""
+"""Per-user YNAB OAuth credentials (access token + refresh token)."""
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,10 +8,10 @@ from . import db
 @dataclass(frozen=True)
 class YNABConnection:
     user_id: str
-    kind: str  # 'pat' | 'oauth'
+    kind: str  # 'oauth' (the only kind created; legacy 'pat' rows are re-prompted)
     access_token: str
     refresh_token: str | None
-    expires_at: float | None  # unix time; None for PATs
+    expires_at: float | None  # unix time
 
 
 class ConnectionStore:
@@ -35,9 +35,6 @@ class ConnectionStore:
             refresh_token=row["refresh_token"],
             expires_at=row["expires_at"],
         )
-
-    def set_pat(self, user_id: str, token: str) -> None:
-        self._upsert(user_id, "pat", token, None, None)
 
     def set_oauth(
         self, user_id: str, access_token: str, refresh_token: str, expires_at: float

@@ -1,8 +1,7 @@
 """YNAB OAuth (authorization-code flow) and per-user access-token resolution.
 
 Available only when the deployment registers an OAuth application with YNAB
-(YNAB_CLIENT_ID / YNAB_CLIENT_SECRET); users can always connect with a
-personal access token instead.
+(YNAB_CLIENT_ID / YNAB_CLIENT_SECRET). OAuth is the only way users connect.
 """
 import threading
 import time
@@ -135,7 +134,7 @@ def get_access_token(settings: Settings, store: ConnectionStore, user_id: str) -
     connection = store.get(user_id)
     if connection is None:
         return None
-    if connection.kind == "pat" or _is_fresh(connection):
+    if _is_fresh(connection):
         return connection.access_token
 
     with _refresh_lock(user_id):
@@ -143,7 +142,7 @@ def get_access_token(settings: Settings, store: ConnectionStore, user_id: str) -
         connection = store.get(user_id)
         if connection is None:
             return None
-        if connection.kind == "pat" or _is_fresh(connection):
+        if _is_fresh(connection):
             return connection.access_token
         if not connection.refresh_token:
             store.delete(user_id)

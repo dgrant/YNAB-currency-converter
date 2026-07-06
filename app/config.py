@@ -12,17 +12,18 @@ def _require(name: str) -> str:
 class Settings:
     def __init__(self) -> None:
         self.secret_key = _require("SECRET_KEY")
-        # Legacy single-user leftovers, consumed only by `python -m
-        # app.import_legacy` (they were the v1 login password and YNAB token).
+        # Legacy single-user leftover (the v1 login password), consumed only
+        # by `python -m app.import_legacy`. The old YNAB_TOKEN env var is no
+        # longer read anywhere — the app is OAuth-only, so an imported user
+        # reconnects via OAuth instead.
         self.app_password = os.environ.get("APP_PASSWORD", "")
-        self.ynab_token = os.environ.get("YNAB_TOKEN", "")
         self.data_dir = Path(os.environ.get("DATA_DIR", "data"))
         self.ynab_api_base = os.environ.get("YNAB_API_BASE", "https://api.ynab.com/v1")
         self.frankfurter_api_base = os.environ.get(
             "FRANKFURTER_API_BASE", "https://api.frankfurter.dev/v1"
         )
         # YNAB OAuth application credentials (register at YNAB Developer
-        # Settings). When unset, users connect with a personal access token.
+        # Settings). Required for users to connect their YNAB account.
         self.ynab_client_id = os.environ.get("YNAB_CLIENT_ID", "")
         self.ynab_client_secret = os.environ.get("YNAB_CLIENT_SECRET", "")
         self.ynab_oauth_base = os.environ.get("YNAB_OAUTH_BASE", "https://app.ynab.com")

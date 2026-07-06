@@ -6,6 +6,7 @@ PATCH body sent to YNAB.
 """
 import json
 import re
+import time
 
 import respx
 from httpx import Response
@@ -35,21 +36,32 @@ def signup(client, email=EMAIL, password=PASSWORD):
     return token
 
 
-def connect_ynab(client, csrf_token, pat="test-token"):
-    """Store a personal access token for the logged-in user."""
-    response = client.post(
-        "/settings/ynab/pat",
-        data={"token": pat, "csrf_token": csrf_token},
-        follow_redirects=False,
+def connect_ynab(client, csrf_token=None, token="test-token", email=EMAIL):
+    """Give the logged-in user a working YNAB OAuth connection (test seam).
+
+    OAuth is the only connection type, and driving the real callback needs a
+    configured OAuth app + a mocked token exchange; for setup we seed the
+    connection directly in the store with a fresh (non-expiring) access token.
+    """
+    from app.config import get_settings
+    from app.connections import ConnectionStore
+    from app.users import UserStore, normalize_email
+
+    data_dir = get_settings().data_dir
+    user = UserStore(data_dir).get_by_email(normalize_email(email))
+    ConnectionStore(data_dir).set_oauth(
+        user.id,
+        access_token=token,
+        refresh_token="test-refresh",
+        expires_at=time.time() + 3600,
     )
-    assert response.status_code == 303
     return csrf_token
 
 
 def login(client, email=EMAIL, password=PASSWORD):
     """Fresh user ready to use the app: signed up and connected to YNAB."""
     token = signup(client, email, password)
-    return connect_ynab(client, token)
+    return connect_ynab(client, token, email=email)
 
 
 def mock_budgets(iso_code="USD"):
@@ -145,6 +157,39 @@ def test_conversions_redirect_to_settings_until_ynab_connected(app_client):
     connect_ynab(app_client, token)
     index = app_client.get("/conversions")
     assert "Connect your YNAB account first" not in index.text
+
+
+def test_legacy_connection_is_treated_as_unconnected(app_client):
+    """A pre-OAuth-only row (no refresh_token) must not act as a live credential.
+
+    require_ynab redirects to /settings like having no connection at all, but
+    with an explanatory ?error=reauth — silently disconnecting a real user
+    with no explanation is the failure mode this guards against."""
+    from app.config import get_settings
+    from app.connections import ConnectionStore
+    from app.users import UserStore, normalize_email
+
+    signup(app_client)
+    data_dir = get_settings().data_dir
+    user = UserStore(data_dir).get_by_email(normalize_email(EMAIL))
+    ConnectionStore(data_dir)._upsert(user.id, "pat", "legacy-token", None, None)
+
+    response = app_client.get("/conversions/new", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/settings?error=reauth"
+    # the stale row is cleaned up as a side effect
+    page = app_client.get(response.headers["location"])
+    assert "Not connected" in page.text
+    assert "had to be cleared" in page.text
+
+
+def test_never_connected_redirects_without_reauth_message(app_client):
+    """A user who was never connected gets the plain redirect — no false
+    'your old connection was cleared' message when nothing existed at all."""
+    signup(app_client)
+    response = app_client.get("/conversions/new", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/settings"
 
 
 @respx.mock

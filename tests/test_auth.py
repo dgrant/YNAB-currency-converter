@@ -143,22 +143,22 @@ def test_login_brute_force_throttled_per_email(app_client):
     assert EMAIL not in auth._throttle
 
 
-def test_settings_pat_connect_and_disconnect(app_client):
+def test_settings_connect_and_disconnect(app_client):
     token = signup(app_client)
 
     page = app_client.get("/settings")
     assert page.status_code == 200
     assert "Not connected" in page.text
-    assert "Personal access token" in page.text
-    # OAuth is not configured in tests, so no connect button
+    # PAT entry is gone, and OAuth isn't configured in tests, so nothing to click.
+    assert "personal access token" not in page.text.lower()
     assert "/oauth/ynab/start" not in page.text
 
-    connect_ynab(app_client, token, pat="my-secret-token")
+    connect_ynab(app_client, token)  # seeds an OAuth connection directly
     page = app_client.get("/settings?ok=connected")
     assert "YNAB connected." in page.text
-    assert "personal access token" in page.text
+    assert "via OAuth" in page.text
     # the token itself is never rendered back
-    assert "my-secret-token" not in page.text
+    assert "test-token" not in page.text
 
     response = app_client.post(
         "/settings/ynab/disconnect", data={"csrf_token": token}, follow_redirects=False
@@ -169,14 +169,26 @@ def test_settings_pat_connect_and_disconnect(app_client):
     assert "YNAB disconnected" in page.text
 
 
-def test_empty_pat_rejected(app_client):
+def test_settings_shows_legacy_connection_needs_reauth(app_client):
+    """A pre-OAuth-only connection (no refresh_token) must not claim 'via OAuth'."""
+    from app.config import get_settings
+    from app.connections import ConnectionStore
+    from app.users import UserStore, normalize_email
+
     token = signup(app_client)
+    data_dir = get_settings().data_dir
+    user = UserStore(data_dir).get_by_email(normalize_email(EMAIL))
+    ConnectionStore(data_dir)._upsert(user.id, "pat", "legacy-token", None, None)
+
+    page = app_client.get("/settings")
+    assert "Connected to YNAB" in page.text
+    assert "via OAuth" not in page.text
+    assert "needs to be re-authorized" in page.text
+    # disconnect still works for a legacy row
     response = app_client.post(
-        "/settings/ynab/pat", data={"token": "   ", "csrf_token": token}, follow_redirects=False
+        "/settings/ynab/disconnect", data={"csrf_token": token}, follow_redirects=False
     )
     assert response.status_code == 303
-    assert response.headers["location"] == "/settings?error=empty_token"
-    assert "Paste a personal access token" in app_client.get("/settings?error=empty_token").text
 
 
 def test_login_page_redirects_when_already_logged_in(app_client):

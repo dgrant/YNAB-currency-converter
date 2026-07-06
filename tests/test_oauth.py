@@ -123,10 +123,14 @@ def test_no_connection_returns_none(tmp_path):
     assert get_access_token(SETTINGS, store, user.id) is None
 
 
-def test_pat_returned_as_is(tmp_path):
+def test_legacy_pat_connection_is_deleted_not_returned(tmp_path):
+    """A pre-OAuth-only row (no refresh_token) must be cleaned up, not treated
+    as a usable, non-expiring credential — OAuth is the only connection kind
+    the app creates now, so anything without a refresh token is stale."""
     user, store = make_user_and_store(tmp_path)
-    store.set_pat(user.id, "my-pat")
-    assert get_access_token(SETTINGS, store, user.id) == "my-pat"
+    store._upsert(user.id, "pat", "legacy-token", None, None)
+    assert get_access_token(SETTINGS, store, user.id) is None
+    assert store.get(user.id) is None
 
 
 @respx.mock

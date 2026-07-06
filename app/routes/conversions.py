@@ -38,9 +38,16 @@ def get_store() -> ConversionStore:
 def require_ynab(user: User = Depends(require_login)) -> YNABClient:
     """The user's YNAB client, or a 303 to /settings if not connected yet."""
     settings = get_settings()
-    token = oauth.get_access_token(settings, ConnectionStore(settings.data_dir), user.id)
+    store = ConnectionStore(settings.data_dir)
+    # A connection with no refresh_token predates OAuth-only support; if
+    # get_access_token is about to clean it up, tell /settings so it can
+    # explain the forced reconnect instead of just saying "Not connected".
+    existing = store.get(user.id)
+    had_stale_connection = existing is not None and not existing.refresh_token
+    token = oauth.get_access_token(settings, store, user.id)
     if token is None:
-        raise HTTPException(status_code=303, headers={"Location": "/settings"})
+        location = "/settings?error=reauth" if had_stale_connection else "/settings"
+        raise HTTPException(status_code=303, headers={"Location": location})
     return YNABClient(token, settings.ynab_api_base)
 
 

@@ -68,17 +68,18 @@ not break (memo marker format, milliunit math, preview→approve contract).
       auto-refresh on expiry with a 60s margin (`app/oauth.py`). Activated
       by registering an OAuth app (free, YNAB Developer Settings; redirect
       URI `<origin>/oauth/ynab/callback`) and setting `YNAB_CLIENT_ID` /
-      `YNAB_CLIENT_SECRET` (+ `PUBLIC_BASE_URL` behind the proxy) — not yet
-      done for the live deployment, which needs David to register the app.
-      Until then users paste personal access tokens.
+      `YNAB_CLIENT_SECRET` (+ `PUBLIC_BASE_URL` behind the proxy). Registered
+      and live for the deployment (2026-07). OAuth is now the *only* connection
+      type — the personal-access-token path was removed (2026-07) so the app is
+      truthfully OAuth-only for the App Review.
 ### Lift the YNAB OAuth app out of Restricted Mode
 
 A freshly registered OAuth app is token-capped (~25 access tokens), so
 beyond a handful of connected users new "Connect to YNAB" authorizations
 fail. Removing the cap means passing YNAB's OAuth App Review (Asana form).
-Not blocking for friends-and-family scale — users can always paste a
-personal access token on `/settings` (no cap). The review's prerequisites,
-each as its own task:
+Since the PAT fallback was removed, this cap is now the only way to add users
+beyond ~25 until the review clears — fine at friends-and-family scale. The
+review's prerequisites, each as its own task:
 
 - [x] **Footer trademark disclaimer.** Done (2026-07): every page footer
       (`templates/base.html`) carries the standard "not affiliated…
@@ -110,13 +111,12 @@ each as its own task:
       to have Restricted Mode removed. Auth is already OAuth-only, which the
       form requires.
 - [x] **Multi-user.** Done (2026-07): email+password signup like rmillan's,
-      per-user YNAB credentials (OAuth or PAT), conversions scoped by
-      `user_id`, all in SQLite (`data/app.db` — users, ynab_connections,
-      conversions). `python -m app.import_legacy <email>` migrates a v1
-      deployment. Follow-ups worth considering: password reset (needs
-      outbound email), account deletion, validating a pasted PAT against
-      `GET /user` at save time, and signup abuse controls if it's ever
-      opened up beyond friends & family.
+      per-user YNAB credentials (OAuth — the PAT path was removed 2026-07),
+      conversions scoped by `user_id`, all in SQLite (`data/app.db` — users,
+      ynab_connections, conversions). `python -m app.import_legacy <email>`
+      migrates a v1 deployment. Follow-ups worth considering: password reset
+      (needs outbound email), account deletion, and signup abuse controls if
+      it's ever opened up beyond friends & family.
 - [ ] **Crypto / non-ECB currencies.** Frankfurter is ~30 fiat currencies
       (ECB data). Add a second rate source behind the `RateTable` interface
       (e.g. CoinGecko for crypto) and pick per conversion.
