@@ -102,12 +102,12 @@ def _validate_to_currency(ynab: YNABClient, budget_id: str, to_currency: str) ->
     than trusting the form field."""
     budget = next((b for b in ynab.get_budgets() if b["id"] == budget_id), None)
     if budget is None:
-        raise HTTPException(400, "Unknown budget")
+        raise HTTPException(400, "Unknown plan")
     budget_currency = (budget.get("currency_format") or {}).get("iso_code", "")
     if budget_currency and to_currency != budget_currency:
         raise HTTPException(
             400,
-            f"Budget '{budget['name']}' uses {budget_currency}; transactions must be "
+            f"Plan '{budget['name']}' uses {budget_currency}; transactions must be "
             f"converted to {budget_currency}, not {to_currency}",
         )
 

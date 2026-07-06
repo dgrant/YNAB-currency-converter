@@ -30,6 +30,8 @@ def test_privacy_page_is_public(app_client):
     assert "Privacy Policy" in response.text
     # Explains handling of YNAB-API data, per the OAuth App Review.
     assert "YNAB API" in response.text
+    # Data-deletion/contact requests need an actually reachable address.
+    assert 'href="mailto:' in response.text
 
 
 def test_footer_has_trademark_disclaimer(app_client):
