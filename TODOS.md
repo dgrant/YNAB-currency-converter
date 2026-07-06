@@ -165,6 +165,19 @@ each as its own task:
 
 ## Ops / deployment
 
+- [ ] **Rotate the YNAB OAuth client secret.** The secret was visible in a
+      screenshot during setup (2026-07), so treat it as exposed. Regenerate
+      it in YNAB → Developer Settings → the OAuth app, then update
+      `YNAB_CLIENT_SECRET` in the server `.env` (re-run `set-ynab-oauth.sh`
+      or edit directly) and `docker compose up -d --force-recreate`. Already-
+      minted access/refresh tokens keep working, so connected users stay
+      connected through the rotation.
+- [ ] **Remove the dead single-user secrets from the server `.env`.**
+      `APP_PASSWORD` and `YNAB_TOKEN` are no longer read by the app after the
+      multi-user migration (only `app.import_legacy` ever used them, and that
+      has run). Delete both from `.env`, and revoke the old `YNAB_TOKEN`
+      personal access token in YNAB → Developer Settings so the long-lived
+      credential can't be used.
 - [ ] **Deploy via GitHub Actions** instead of the server-side cron poller.
       A workflow job (after CI passes on master) that SSHes into the Linode
       and runs `deploy/autodeploy.sh` (or `git pull && docker compose up -d
