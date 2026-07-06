@@ -73,9 +73,26 @@
     if (budget && budget.currency) {
       toCurrency.value = budget.currency;
     }
+    guessFromCurrency();
   }
 
   budgetSelect.addEventListener("change", refreshAccounts);
+
+  // Smart default: if the account name contains a currency code ("Chequing
+  // USD"), preselect it as the original currency. Never overrides a currency
+  // the user picked by hand, and edit's initial load restores the saved value.
+  let fromCurrencyTouched = false;
+  fromCurrency.addEventListener("change", () => { fromCurrencyTouched = true; });
+  const currencyCodes = new Set([...fromCurrency.options].map(o => o.value));
+
+  function guessFromCurrency() {
+    if (fromCurrencyTouched) return;
+    const accountName = accountSelect.selectedOptions[0]?.text || "";
+    const code = accountName.toUpperCase().split(/[^A-Z]+/).find(w => currencyCodes.has(w));
+    if (code) fromCurrency.value = code;
+  }
+
+  accountSelect.addEventListener("change", guessFromCurrency);
 
   if (conversion) {
     budgetSelect.value = conversion.budget_id;
