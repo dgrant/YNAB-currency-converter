@@ -38,14 +38,13 @@ body {
   line-height: 1.5;
 }
 
-/* Content links use the accent colour so they stay legible in both
-   themes; without this they fall back to the browser default blue/purple,
-   which is nearly unreadable against the dark background. */
-a {
-  color: var(--accent);
-}
-
-a:visited {
+/* Content links use the accent colour (both unvisited and visited) so they
+   stay legible in both themes; without this they fall back to the browser
+   default blue/purple, which is nearly unreadable against the dark
+   background. Wrapped in :where() so this rule carries zero specificity and
+   never overrides styled anchors (.brand, .button, .nav-links a), including
+   their visited state. */
+:where(a:link, a:visited) {
   color: var(--accent);
 }
 
