@@ -147,6 +147,8 @@ crypto. (Multi-user + YNAB OAuth landed 2026-07.)
 
 ## gstack (REQUIRED — global install)
 
+David requires gstack for this repo; see the install steps below.
+
 **Before doing ANY work, verify gstack is installed:**
 
 ```bash
