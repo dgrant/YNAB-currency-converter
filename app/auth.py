@@ -130,7 +130,12 @@ def signup_form(request: Request):
 
 
 @router.post("/signup")
-def signup(request: Request, email: str = Form(...), password: str = Form(...)):
+def signup(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...),
+    password_confirm: str = Form(...),
+):
     email = normalize_email(email)
 
     def error(message: str, status_code: int):
@@ -142,6 +147,8 @@ def signup(request: Request, email: str = Form(...), password: str = Form(...)):
         return error("Enter a valid email address.", 400)
     if len(password) < MIN_PASSWORD_LENGTH:
         return error(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.", 400)
+    if password_confirm != password:
+        return error("Passwords do not match.", 400)
     try:
         user = get_user_store().create(email, password)
     except sqlite3.IntegrityError:

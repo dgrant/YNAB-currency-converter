@@ -47,15 +47,26 @@ def test_footer_has_trademark_disclaimer(app_client):
 def test_signup_validation(app_client):
     token = get_csrf(app_client)
 
-    def try_signup(email, password):
+    def try_signup(email, password, confirm=None):
         return app_client.post(
-            "/signup", data={"email": email, "password": password, "csrf_token": token}
+            "/signup",
+            data={
+                "email": email,
+                "password": password,
+                "password_confirm": password if confirm is None else confirm,
+                "csrf_token": token,
+            },
         )
 
     assert try_signup("not-an-email", PASSWORD).status_code == 400
     response = try_signup(EMAIL, "short")
     assert response.status_code == 400
     assert "at least 8 characters" in response.text
+    response = try_signup(EMAIL, PASSWORD, confirm="different-password")
+    assert response.status_code == 400
+    assert "Passwords do not match" in response.text
+    # the mismatch was rejected before creating the user, so the email is still free
+    assert try_signup(EMAIL, PASSWORD).status_code == 200
 
 
 def test_signup_duplicate_email_rejected_case_insensitively(app_client):
@@ -64,7 +75,8 @@ def test_signup_duplicate_email_rejected_case_insensitively(app_client):
     token = get_csrf(app_client)
     response = app_client.post(
         "/signup",
-        data={"email": EMAIL.upper(), "password": "other-password", "csrf_token": token},
+        data={"email": EMAIL.upper(), "password": "other-password",
+              "password_confirm": "other-password", "csrf_token": token},
     )
     assert response.status_code == 409
     assert "already registered" in response.text
@@ -229,7 +241,7 @@ def test_https_only_deployment_sends_hsts_and_secure_cookie(app_client_factory):
         resp = https.post(
             "/signup",
             data={"email": "s@example.com", "password": "password123",
-                  "csrf_token": get_csrf(https)},
+                  "password_confirm": "password123", "csrf_token": get_csrf(https)},
             follow_redirects=False,
         )
         assert any("secure" in c.lower() for c in resp.headers.get_list("set-cookie"))
