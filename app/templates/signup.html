@@ -16,14 +16,15 @@
   </form>
   <script>
     const password = document.getElementById("password");
-    const confirm = document.getElementById("password_confirm");
+    const confirmInput = document.getElementById("password_confirm");
     function checkMatch() {
-      confirm.setCustomValidity(
-        confirm.value && confirm.value !== password.value ? "Passwords do not match." : ""
+      confirmInput.setCustomValidity(
+        confirmInput.value && confirmInput.value !== password.value
+          ? "Passwords do not match." : ""
       );
     }
     password.addEventListener("input", checkMatch);
-    confirm.addEventListener("input", checkMatch);
+    confirmInput.addEventListener("input", checkMatch);
   </script>
   <p class="hint">Already have an account? <a href="/login">Log in</a>.</p>
 </div>
