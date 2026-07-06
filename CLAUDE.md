@@ -96,8 +96,8 @@ servers (see `tests/` and `test_app_flow.py`).
 
 ## Deploy
 
-Live at **https://ynabfx.davidgrant.ca**. Verify from outside with
-`curl -s https://ynabfx.davidgrant.ca/healthz` → `{"status":"ok","version":"<git sha>"}`
+Live at **https://fxforynab.davidgrant.ca**. Verify from outside with
+`curl -s https://fxforynab.davidgrant.ca/healthz` → `{"status":"ok","version":"<git sha>"}`
 (plain GET — agent sandbox proxies 405 HEAD requests). The version is baked
 in at image build time (`ARG GIT_SHA`, exported by `autodeploy.sh`), so this
 answers "what's live" without SSH; the page footer shows it too.
@@ -110,7 +110,7 @@ resource choice:** the per-conversion apply lock (`_apply_locks` in
 refresh-rotation serialization they provide. Don't add `--workers` without moving
 that coordination to a shared store.
 Server: David's Linode (Debian 12), app at `~/YNAB-currency-converter`,
-fronted by host nginx (vhost `/etc/nginx/sites-available/ynabfx.davidgrant.ca`
+fronted by host nginx (vhost `/etc/nginx/sites-available/fxforynab.davidgrant.ca`
 → `proxy_pass http://127.0.0.1:8000`) with a certbot Let's Encrypt cert
 (auto-renew via timer). `docker compose` works without sudo; sudo needs a
 password. Secrets (`SECRET_KEY`, optional `YNAB_CLIENT_SECRET`, legacy

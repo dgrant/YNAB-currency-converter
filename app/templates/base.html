@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}YNAB Currency Converter{% endblock %}</title>
+  <title>{% block title %}Currency Converter for YNAB{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css?v={{ app_version()[:12] }}">
 </head>
 <body>
   <header>
     <nav>
-      <a class="brand" href="/conversions">YNAB Currency Converter</a>
+      <a class="brand" href="/conversions">Currency Converter for YNAB</a>
       {% if request.session.get("user_id") %}
       <span class="nav-links">
         <a href="/settings">Settings</a>
@@ -25,7 +25,19 @@
     {% block content %}{% endblock %}
   </main>
   <footer>
-    <span class="hint">version {{ app_version()[:12] }}</span>
+    <p class="disclaimer">
+      We are not affiliated, associated, or in any way officially connected
+      with YNAB or any of its subsidiaries or affiliates. The official YNAB
+      website can be found at
+      <a href="https://www.ynab.com" rel="noopener">https://www.ynab.com</a>.
+      The names YNAB and You Need A Budget, as well as related names,
+      tradenames, marks, trademarks, emblems, and images are
+      registered trademarks of YNAB.
+    </p>
+    <p class="hint">
+      <a href="/privacy">Privacy Policy</a>
+      &middot; version {{ app_version()[:12] }}
+    </p>
   </footer>
 </body>
 </html>

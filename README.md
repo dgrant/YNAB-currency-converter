@@ -1,4 +1,4 @@
-# YNAB Currency Converter
+# Currency Converter for YNAB
 
 A self-hosted clone of the "Multi-currency for YNAB" conversions page
 (ynab.rmillan.com/conversions).

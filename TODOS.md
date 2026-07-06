@@ -80,22 +80,32 @@ Not blocking for friends-and-family scale — users can always paste a
 personal access token on `/settings` (no cap). The review's prerequisites,
 each as its own task:
 
-- [ ] **Footer trademark disclaimer.** Add to every page footer
-      (`templates/base.html`): "We are not affiliated, associated, or in
-      any way officially connected with YNAB… The names YNAB and You Need A
-      Budget… are registered trademarks of YNAB." (Exact wording is on the
-      review form.)
-- [ ] **Real Privacy Policy page.** Add a `/privacy` route + page that
-      explains how data obtained through the YNAB API is handled, stored,
-      and secured (today it's only the landing-page blurb). Link it from the
-      footer and use its URL in Developer Settings + the review form.
-- [ ] **"Plan" not "budget" branding.** YNAB brand language prefers "plan"
-      over "budget" where applicable; the UI/copy say "budget" throughout.
-      Decide how far to reword, and make sure nothing implies YNAB
-      endorsement.
-- [ ] **Confirm name uniqueness + logo rules.** App name must not already
-      be on the Works With YNAB list; no YNAB logos except the authorized
-      "Works with YNAB" logo (we use none today — just verify).
+- [x] **Footer trademark disclaimer.** Done (2026-07): every page footer
+      (`templates/base.html`) carries the standard "not affiliated…
+      registered trademarks of YNAB" disclaimer. Verify the wording matches
+      the current review form before submitting — the standard language was
+      used, not a copy pasted from the form.
+- [x] **Real Privacy Policy page.** Done (2026-07): `/privacy` route +
+      `privacy.html` (public, linked from the footer) explaining what YNAB-API
+      data is handled, what is not stored (stateless preview→approve), and how
+      it's secured. Use its URL in Developer Settings + the review form.
+- [x] **"Plan" not "budget" branding.** Done (2026-07): user-facing copy
+      referring to the YNAB plan entity now says "Plan"/"plan" (index and
+      detail labels, new/edit form labels, landing + index copy). Code
+      identifiers and YNAB API field names (`budget_id`, `budget_name`, the JS
+      `budgets`) are left as-is since the API itself calls them budgets. The
+      landing headline keeps the verb "Budget in yours." (generic English, not
+      the YNAB noun). Nothing implies YNAB endorsement.
+- [x] **Confirm name uniqueness + logo rules.** Done (2026-07): checked the
+      full Works With YNAB list — nothing named "Currency Converter" or with
+      convert/exchange/FX in it; the only currency app is "Multi-currency for
+      YNAB" (ynab.rmillan.com). Renamed the app "YNAB Currency Converter" →
+      "Currency Converter for YNAB" so it follows the "‹Name› for YNAB"
+      pattern instead of leading with the trademark (which can read as
+      official/endorsed), and dropped the landing tagline that duplicated
+      rmillan's exact app name. We use no YNAB logos. If David prefers a
+      different compliant name, change the template titles + nav brand +
+      `main.py` FastAPI title.
 - [ ] **Submit the OAuth App Review form** (Asana) once the above are live,
       to have Restricted Mode removed. Auth is already OAuth-only, which the
       form requires.

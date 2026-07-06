@@ -6,7 +6,7 @@
         action="{{ '/conversions/' + conversion.id + '/edit' if conversion else '/conversions' }}"
         id="conversion-form">
     {{ csrf_input(request) }}
-    <label for="budget">Budget</label>
+    <label for="budget">Plan</label>
     <select id="budget" name="budget_id" required></select>
 
     <label for="account">Account (transactions entered in foreign currency)</label>
@@ -19,7 +19,7 @@
       {% endfor %}
     </select>
 
-    <label for="to_currency">Convert to (budget currency)</label>
+    <label for="to_currency">Convert to (plan currency)</label>
     <select id="to_currency" name="to_currency" required>
       {% for code, name in currencies.items() %}
       <option value="{{ code }}">{{ code }} — {{ name }}</option>
