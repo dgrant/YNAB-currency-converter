@@ -20,6 +20,8 @@ _FLASHES = {
 }
 _ERRORS = {
     "denied": "YNAB authorization was cancelled or denied — nothing was connected.",
+    "reauth": "Your YNAB connection predates OAuth-only support and had to be "
+    "cleared — please reconnect.",
 }
 
 

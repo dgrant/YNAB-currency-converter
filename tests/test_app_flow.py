@@ -160,8 +160,11 @@ def test_conversions_redirect_to_settings_until_ynab_connected(app_client):
 
 
 def test_legacy_connection_is_treated_as_unconnected(app_client):
-    """A pre-OAuth-only row (no refresh_token) must not act as a live credential
-    — require_ynab should redirect to /settings just like having no connection."""
+    """A pre-OAuth-only row (no refresh_token) must not act as a live credential.
+
+    require_ynab redirects to /settings like having no connection at all, but
+    with an explanatory ?error=reauth — silently disconnecting a real user
+    with no explanation is the failure mode this guards against."""
     from app.config import get_settings
     from app.connections import ConnectionStore
     from app.users import UserStore, normalize_email
@@ -173,9 +176,20 @@ def test_legacy_connection_is_treated_as_unconnected(app_client):
 
     response = app_client.get("/conversions/new", follow_redirects=False)
     assert response.status_code == 303
+    assert response.headers["location"] == "/settings?error=reauth"
+    # the stale row is cleaned up as a side effect
+    page = app_client.get(response.headers["location"])
+    assert "Not connected" in page.text
+    assert "had to be cleared" in page.text
+
+
+def test_never_connected_redirects_without_reauth_message(app_client):
+    """A user who was never connected gets the plain redirect — no false
+    'your old connection was cleared' message when nothing existed at all."""
+    signup(app_client)
+    response = app_client.get("/conversions/new", follow_redirects=False)
+    assert response.status_code == 303
     assert response.headers["location"] == "/settings"
-    # the stale row is cleaned up as a side effect, so /settings now shows disconnected
-    assert "Not connected" in app_client.get("/settings").text
 
 
 @respx.mock
