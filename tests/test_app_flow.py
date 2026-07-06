@@ -6,6 +6,7 @@ PATCH body sent to YNAB.
 """
 import json
 import re
+import time
 
 import respx
 from httpx import Response
@@ -35,21 +36,32 @@ def signup(client, email=EMAIL, password=PASSWORD):
     return token
 
 
-def connect_ynab(client, csrf_token, pat="test-token"):
-    """Store a personal access token for the logged-in user."""
-    response = client.post(
-        "/settings/ynab/pat",
-        data={"token": pat, "csrf_token": csrf_token},
-        follow_redirects=False,
+def connect_ynab(client, csrf_token=None, token="test-token", email=EMAIL):
+    """Give the logged-in user a working YNAB OAuth connection (test seam).
+
+    OAuth is the only connection type, and driving the real callback needs a
+    configured OAuth app + a mocked token exchange; for setup we seed the
+    connection directly in the store with a fresh (non-expiring) access token.
+    """
+    from app.config import get_settings
+    from app.connections import ConnectionStore
+    from app.users import UserStore, normalize_email
+
+    data_dir = get_settings().data_dir
+    user = UserStore(data_dir).get_by_email(normalize_email(email))
+    ConnectionStore(data_dir).set_oauth(
+        user.id,
+        access_token=token,
+        refresh_token="test-refresh",
+        expires_at=time.time() + 3600,
     )
-    assert response.status_code == 303
     return csrf_token
 
 
 def login(client, email=EMAIL, password=PASSWORD):
     """Fresh user ready to use the app: signed up and connected to YNAB."""
     token = signup(client, email, password)
-    return connect_ynab(client, token)
+    return connect_ynab(client, token, email=email)
 
 
 def mock_budgets(iso_code="USD"):

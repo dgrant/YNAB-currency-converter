@@ -22,7 +22,7 @@ class Settings:
             "FRANKFURTER_API_BASE", "https://api.frankfurter.dev/v1"
         )
         # YNAB OAuth application credentials (register at YNAB Developer
-        # Settings). When unset, users connect with a personal access token.
+        # Settings). Required for users to connect their YNAB account.
         self.ynab_client_id = os.environ.get("YNAB_CLIENT_ID", "")
         self.ynab_client_secret = os.environ.get("YNAB_CLIENT_SECRET", "")
         self.ynab_oauth_base = os.environ.get("YNAB_OAUTH_BASE", "https://app.ynab.com")

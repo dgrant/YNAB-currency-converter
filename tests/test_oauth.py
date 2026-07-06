@@ -123,12 +123,6 @@ def test_no_connection_returns_none(tmp_path):
     assert get_access_token(SETTINGS, store, user.id) is None
 
 
-def test_pat_returned_as_is(tmp_path):
-    user, store = make_user_and_store(tmp_path)
-    store.set_pat(user.id, "my-pat")
-    assert get_access_token(SETTINGS, store, user.id) == "my-pat"
-
-
 @respx.mock
 def test_fresh_oauth_token_needs_no_refresh(tmp_path):
     # respx active with no routes: any HTTP call would fail the test

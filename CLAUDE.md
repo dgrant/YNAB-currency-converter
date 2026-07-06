@@ -22,7 +22,7 @@ app/
   db.py              # SQLite schema + connection helper (per-op connections, WAL)
   users.py           # User + UserStore, scrypt password hashing (stdlib)
   auth.py            # signup/login/logout, per-email throttle, require_login -> User
-  connections.py     # ConnectionStore: per-user YNAB credentials (PAT or OAuth pair)
+  connections.py     # ConnectionStore: per-user YNAB OAuth token pair
   oauth.py           # YNAB OAuth: authorize URL, code exchange, refresh, get_access_token
   store.py           # ConversionStore: per-user conversion configs (SQLite)
   ynab.py            # YNABClient: budgets, accounts, transactions, bulk PATCH
@@ -31,7 +31,7 @@ app/
   convert.py         # core: filter unconverted, compute amounts/memos
   import_legacy.py   # one-shot v1 migration: python -m app.import_legacy <email>
   routes/conversions.py  # list / new / detail / preview / apply (all scoped by user)
-  routes/settings.py     # /settings: PAT entry, OAuth start/callback, disconnect
+  routes/settings.py     # /settings: OAuth start/callback, disconnect
   templates/ static/
 tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.py is the full HTTP flow
 ```
@@ -64,11 +64,14 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
   conversions or connections without it. `auth.py` remains the swap point for
   Google Sign-In later (an OIDC flow would set the same `user_id` session
   key). `/login` is brute-force throttled per email (in-memory, module state).
-- **Per-user YNAB credentials** — each user connects on `/settings`: OAuth
-  ("Connect to YNAB", only when `YNAB_CLIENT_ID/SECRET` are set) or a pasted
-  personal access token. `oauth.get_access_token` transparently refreshes
-  expired OAuth tokens; a *rejected* refresh (revoked grant) deletes the
-  connection, transient failures don't. Routes that need YNAB use the
+- **Per-user YNAB credentials** — each user connects on `/settings` via OAuth
+  ("Connect to YNAB", available only when `YNAB_CLIENT_ID/SECRET` are set).
+  OAuth is the only connection type — the personal-access-token path was
+  removed for YNAB OAuth-App-Review compliance (2026-07). `get_access_token`
+  transparently refreshes expired OAuth tokens; a *rejected* refresh (revoked
+  grant) deletes the connection, transient failures don't. Any legacy `pat`
+  row (from before removal) has no refresh token, so it's deleted on next
+  access and the user re-connects via OAuth. Routes that need YNAB use the
   `require_ynab` dependency, which 303s to `/settings` when unconnected.
 - **CSRF** — every POST form must include `{{ csrf_input(request) }}`
   (template global in `templates.py`); `verify_csrf` is a dependency on both

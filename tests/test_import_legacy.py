@@ -33,7 +33,7 @@ def legacy_env(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_import_legacy_creates_user_token_and_conversions(legacy_env):
+def test_import_legacy_creates_user_and_conversions(legacy_env):
     from app.import_legacy import import_legacy
 
     message = import_legacy("david@example.com")
@@ -43,9 +43,9 @@ def test_import_legacy_creates_user_token_and_conversions(legacy_env):
     assert user is not None
     assert verify_password("old-password", user.password_hash)
 
-    connection = ConnectionStore(legacy_env).get(user.id)
-    assert connection.kind == "pat"
-    assert connection.access_token == "old-ynab-token"
+    # The old single-user YNAB_TOKEN is NOT migrated — the app is OAuth-only, so
+    # the imported user connects via OAuth on first sign-in.
+    assert ConnectionStore(legacy_env).get(user.id) is None
 
     conversions = ConversionStore(legacy_env).load(user.id)
     assert len(conversions) == 1

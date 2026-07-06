@@ -9,22 +9,14 @@
   <h2>YNAB connection</h2>
   <p class="hint">Signed in as {{ user.email }}.</p>
   {% if connection %}
-    <p>Connected to YNAB
-      {% if connection.kind == "oauth" %}via OAuth (tokens refresh automatically).
-      {% else %}with a personal access token.{% endif %}
-    </p>
+    <p>Connected to YNAB via OAuth (tokens refresh automatically).</p>
     <form method="post" action="/settings/ynab/disconnect"
           onsubmit="return confirm('Disconnect from YNAB? Your conversions stay configured; previews and applies will stop working until you reconnect.')">
       {{ csrf_input(request) }}
       <button type="submit" class="link danger">Disconnect from YNAB</button>
     </form>
-    {% if connection.kind == "oauth" %}
     <p class="hint">You can also revoke this authorization at any moment from
        YNAB &rarr; Account Settings &rarr; Security.</p>
-    {% else %}
-    <p class="hint">To fully revoke a personal access token, delete it in
-       YNAB &rarr; Account Settings &rarr; Developer Settings.</p>
-    {% endif %}
   {% else %}
     <p>Not connected. The app needs access to your YNAB account to read
        transactions and write converted amounts.</p>
@@ -32,18 +24,8 @@
     <p><a class="button primary" href="/oauth/ynab/start">Connect to YNAB</a></p>
     <p class="hint">You'll be sent to YNAB to authorize access — no API key
        needed, and you can revoke the authorization at any moment.</p>
-    <details>
-      <summary>Or use a personal access token</summary>
-    {% endif %}
-      <form method="post" action="/settings/ynab/pat">
-        {{ csrf_input(request) }}
-        <label for="token">Personal access token</label>
-        <input type="password" id="token" name="token" required
-               placeholder="From YNAB → Account Settings → Developer Settings">
-        <button type="submit" class="primary">Save token</button>
-      </form>
-    {% if oauth_configured %}
-    </details>
+    {% else %}
+    <p class="hint">YNAB connections aren't available on this server yet.</p>
     {% endif %}
   {% endif %}
 </div>
