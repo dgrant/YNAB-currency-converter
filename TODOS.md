@@ -128,27 +128,25 @@ review's prerequisites, each as its own task:
       conversion is set up one account at a time. Add a bulk setup flow that
       lists all accounts (minus those already configured) and lets the user
       create conversions for several at once in a single form.
-- [ ] **Auto-guess the currency from the account name.** When creating a
-      conversion, if a currency code/word (e.g. "USD") appears in the account
-      name, default the currency select/combobox to it. Just a smart default;
-      still user-editable.
+- [x] **Auto-guess the currency from the account name.** Done (2026-07): if
+      the selected account's name contains a known currency code ("Chequing
+      USD"), the form preselects it as the original currency (on load and on
+      account/budget change). A currency the user picked by hand is never
+      overridden. Client-side only; verified by driving the rendered script
+      in Chromium (not covered by pytest).
 - [ ] **Password reset.** Self-service reset flow (needs outbound email — see
       the notifications/scheduler email work). Noted as a follow-up under the
       multi-user item; breaking it out as its own task.
 
 ## Correctness & robustness
 
-- [ ] **Don't block the event loop with sync YNAB calls in async handlers.**
-      `apply()` is `async def` but calls the synchronous `YNABClient`
-      (`httpx.Client`) for `get_transactions` + `update_transactions` without
-      awaiting, so one user's apply blocks the single event loop — and thus
-      every other user's request — for up to two sequential ~30s YNAB
-      round-trips. Pre-existing, but the multi-user merge turned a self-inflicted
-      stall into cross-tenant availability coupling. Fix: wrap the blocking calls
-      in `await run_in_threadpool(...)` (or make `YNABClient` async). Note this
-      also makes the `_apply_lock` in `apply()` actually necessary — today the
-      sync I/O already prevents interleaving, so the lock is a no-op guard that
-      only starts doing real work once the I/O yields.
+- [x] **Don't block the event loop with sync YNAB calls in async handlers.**
+      Done (2026-07): `apply()`'s `get_transactions` + `update_transactions`
+      calls are wrapped in `await run_in_threadpool(...)`, so a slow YNAB
+      round-trip no longer stalls every other user's request. This also made
+      the `_apply_lock` genuinely load-bearing (the I/O now yields inside the
+      locked section). The other handlers are sync `def` and already run in
+      FastAPI's threadpool.
 - [ ] **Derive the plan currency instead of letting the user set it.** We
       currently let the user pick the target/plan currency on the conversion
       form. YNAB knows the plan's currency (`budget_settings.currency_format`
@@ -217,8 +215,9 @@ review's prerequisites, each as its own task:
 - [ ] **Bulk-delete via row checkboxes instead of a per-row Delete button.**
       The per-row Delete button takes up space; replace it with a checkbox per
       row plus a bulk "Delete selected" action. (Keep CSRF + the confirm.)
-- [ ] **Confirm password on the sign-up page.** Require entering the password
-      twice on `/signup` and reject a mismatch client- and server-side.
+- [x] **Confirm password on the sign-up page.** Done (2026-07): second
+      password field on `/signup`, checked client-side (`setCustomValidity`)
+      and server-side (400 on mismatch, before the user row is created).
 
 ## Ops / deployment
 
