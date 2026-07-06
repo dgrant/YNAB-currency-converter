@@ -38,6 +38,17 @@ body {
   line-height: 1.5;
 }
 
+/* Content links use the accent colour so they stay legible in both
+   themes; without this they fall back to the browser default blue/purple,
+   which is nearly unreadable against the dark background. */
+a {
+  color: var(--accent);
+}
+
+a:visited {
+  color: var(--accent);
+}
+
 header {
   background: var(--card);
   border-bottom: 1px solid var(--border);
