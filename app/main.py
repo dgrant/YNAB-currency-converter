@@ -3,13 +3,14 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exception_handlers import http_exception_handler
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import auth, db
 from .config import get_settings
+from .connections import ConnectionStore
 from .rates import RatesError
 from .routes import conversions
 from .routes import settings as settings_routes
@@ -105,6 +106,20 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(YNABError)
     async def ynab_error(request: Request, exc: YNABError) -> Response:
+        if exc.status_code == 401:
+            # A documented YNAB 401 means the access token is invalid, expired,
+            # or revoked (https://api.ynab.com/#errors). get_access_token
+            # refreshes proactively before expiry, so a 401 on a data call
+            # almost always means the user revoked the grant in YNAB — a generic
+            # "try again shortly" is wrong here. Delete the now-dead connection
+            # (same as a rejected refresh in oauth.py) so /settings falls
+            # through to its "not connected" branch with a working reconnect
+            # link, instead of leaving a stale row that renders "Connected"
+            # with no way back in except Disconnect-then-reconnect.
+            user_id = request.session.get("user_id")
+            if user_id:
+                ConnectionStore(settings.data_dir).delete(user_id)
+            return RedirectResponse("/settings?error=revoked", status_code=303)
         if exc.status_code == 429:
             return _error_page(
                 request,
