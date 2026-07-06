@@ -44,7 +44,7 @@ def create_app() -> FastAPI:
     # CSRF verification is app-level so every router — present and future —
     # is covered without opting in (it no-ops on non-POST requests).
     app = FastAPI(
-        title="YNAB Currency Converter",
+        title="Currency Converter for YNAB",
         dependencies=[Depends(auth.verify_csrf)],
     )
     app.add_middleware(

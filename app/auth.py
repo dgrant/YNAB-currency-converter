@@ -116,6 +116,12 @@ def home(request: Request):
     return templates.TemplateResponse(request, "landing.html", {})
 
 
+@router.get("/privacy")
+def privacy(request: Request):
+    """Public privacy policy; required for the YNAB OAuth App Review."""
+    return templates.TemplateResponse(request, "privacy.html", {})
+
+
 @router.get("/signup")
 def signup_form(request: Request):
     if request.session.get("user_id"):
