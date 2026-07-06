@@ -81,8 +81,11 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
 - **Split transactions are skipped** — `is_split()` in `convert.py`; never
   let apply patch a split parent's top-level amount.
 - **Upstream errors** — raise `YNABError`/`RatesError`; exception handlers in
-  `main.py` render `error.html` (429 gets its own copy). Idempotent GETs go
-  through `app/http.py: get_with_retry`; the PATCH is never retried.
+  `main.py` render `error.html` (429 gets its own copy). A `YNABError` with
+  `status_code == 401` (YNAB's documented signal for an invalid/expired/
+  revoked access token) instead 303s to `/settings?error=revoked` — no error
+  page, since the fix is to reconnect, not retry. Idempotent GETs go through
+  `app/http.py: get_with_retry`; the PATCH is never retried.
 
 ## Dev
 

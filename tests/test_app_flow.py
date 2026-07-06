@@ -582,7 +582,7 @@ def test_users_cannot_see_each_others_conversions(app_client):
 
 
 @respx.mock
-def test_ynab_401_redirects_to_reconnect(app_client):
+def test_ynab_401_redirects_to_reconnect(app_client_factory):
     """A documented YNAB 401 (token revoked/expired) on a data call must guide
     the user to reconnect, not show a generic 'try again shortly' error page.
     The proactive refresh keeps tokens fresh, so a 401 here means a dead grant."""
@@ -590,13 +590,19 @@ def test_ynab_401_redirects_to_reconnect(app_client):
         return_value=Response(401, json={"error": {
             "id": "401", "name": "unauthorized", "detail": "Not authorized"}})
     )
-    login(app_client)
-    # /conversions/new loads budgets from YNAB; the 401 short-circuits to settings
-    response = app_client.get("/conversions/new", follow_redirects=False)
-    assert response.status_code == 303
-    assert response.headers["location"] == "/settings?error=revoked"
-    page = app_client.get(response.headers["location"])
-    assert "revoked" in page.text.lower()
+    with app_client_factory(YNAB_CLIENT_ID="cid", YNAB_CLIENT_SECRET="csec") as app_client:
+        login(app_client)
+        # /conversions/new loads budgets from YNAB; the 401 short-circuits to settings
+        response = app_client.get("/conversions/new", follow_redirects=False)
+        assert response.status_code == 303
+        assert response.headers["location"] == "/settings?error=revoked"
+        page = app_client.get(response.headers["location"])
+        assert "revoked" in page.text.lower()
+        # the dead connection must be cleared, not just flagged — otherwise the
+        # page renders "Connected" with no way back in except Disconnect-then-
+        # reconnect, contradicting its own "please reconnect" message
+        assert "Not connected" in page.text
+        assert 'href="/oauth/ynab/start"' in page.text
 
 
 @respx.mock

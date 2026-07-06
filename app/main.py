@@ -10,6 +10,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from . import auth, db
 from .config import get_settings
+from .connections import ConnectionStore
 from .rates import RatesError
 from .routes import conversions
 from .routes import settings as settings_routes
@@ -110,9 +111,14 @@ def create_app() -> FastAPI:
             # or revoked (https://api.ynab.com/#errors). get_access_token
             # refreshes proactively before expiry, so a 401 on a data call
             # almost always means the user revoked the grant in YNAB — a generic
-            # "try again shortly" is wrong here. Send them to /settings to
-            # reconnect. Nothing was written (the 401 aborts the request), and
-            # reconnecting via OAuth upserts a fresh token over the dead one.
+            # "try again shortly" is wrong here. Delete the now-dead connection
+            # (same as a rejected refresh in oauth.py) so /settings falls
+            # through to its "not connected" branch with a working reconnect
+            # link, instead of leaving a stale row that renders "Connected"
+            # with no way back in except Disconnect-then-reconnect.
+            user_id = request.session.get("user_id")
+            if user_id:
+                ConnectionStore(settings.data_dir).delete(user_id)
             return RedirectResponse("/settings?error=revoked", status_code=303)
         if exc.status_code == 429:
             return _error_page(
