@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Privacy Policy — YNAB Currency Converter{% endblock %}
+{% block content %}
+<div class="prose">
+  <h1>Privacy Policy</h1>
+  <p class="hint">Last updated: 2026-07-06</p>
+
+  <p>
+    This app helps you convert foreign-currency transactions in your YNAB plan
+    to your plan's currency. This policy explains what data it handles, how that
+    data is stored and secured, and the choices you have. It applies to data
+    obtained through the YNAB API as well as the account you create here.
+  </p>
+
+  <h2>What we store</h2>
+  <ul>
+    <li>
+      <strong>Your account.</strong> Your email address and a salted hash of
+      your password (never the password itself).
+    </li>
+    <li>
+      <strong>Your YNAB connection.</strong> Either the OAuth access and refresh
+      tokens issued to this app when you click “Connect to YNAB”, or the
+      personal access token you paste on the Settings page. These let the app
+      read your transactions and write back converted amounts on your behalf.
+    </li>
+    <li>
+      <strong>Your conversion settings.</strong> The YNAB plan and account you
+      chose, the source currency, and the start date — the configuration needed
+      to build a preview.
+    </li>
+  </ul>
+
+  <h2>What we do <em>not</em> store</h2>
+  <p>
+    The app does not keep a copy of your transactions. When you request a
+    preview, it fetches the relevant transactions from YNAB, computes the
+    converted amounts in memory, and shows them to you. Nothing is written to
+    YNAB until you explicitly approve, and the proposed changes are carried
+    through your browser (in the form you submit) rather than saved on the
+    server. Once a request finishes, that transaction data is gone from the app.
+  </p>
+
+  <h2>Data obtained through the YNAB API</h2>
+  <p>
+    Access to your YNAB data is used solely to display previews and to apply the
+    conversions you approve. It is never sold, shared with third parties, or
+    used for advertising or profiling. Exchange rates are retrieved from the
+    <a href="https://frankfurter.dev" rel="noopener">Frankfurter</a> API
+    (European Central Bank data); this request contains only currency codes and
+    dates — none of your YNAB or account data is sent to it.
+  </p>
+
+  <h2>How it is secured</h2>
+  <ul>
+    <li>All traffic is served over HTTPS.</li>
+    <li>
+      Data is held in a private database on the server that runs this app and is
+      not exposed publicly.
+    </li>
+    <li>Passwords are stored only as salted hashes.</li>
+    <li>
+      Access requires logging in; each user can see only their own account,
+      connection, and conversions.
+    </li>
+  </ul>
+
+  <h2>Your choices</h2>
+  <ul>
+    <li>
+      You can disconnect your YNAB account at any time from the Settings page,
+      which removes the stored tokens. You may also revoke this app's access
+      directly in your YNAB
+      <a href="https://app.ynab.com/settings" rel="noopener">account settings</a>.
+    </li>
+    <li>
+      To delete your account and associated data, contact the operator of this
+      instance.
+    </li>
+  </ul>
+
+  <h2>Contact</h2>
+  <p>
+    Questions about this policy or your data can be directed to the operator of
+    this instance.
+  </p>
+</div>
+{% endblock %}

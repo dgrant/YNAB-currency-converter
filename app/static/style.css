@@ -212,3 +212,15 @@ footer {
   text-align: center;
   font-size: 0.8rem;
 }
+footer .disclaimer {
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  max-width: 640px;
+  margin: 0 auto 0.5rem;
+}
+
+.prose { max-width: 720px; margin: 0 auto; }
+.prose h2 { margin-top: 1.5rem; }
+.prose ul { padding-left: 1.25rem; }
+.prose li { margin: 0.35rem 0; }

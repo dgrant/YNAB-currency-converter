@@ -25,7 +25,18 @@
     {% block content %}{% endblock %}
   </main>
   <footer>
-    <span class="hint">version {{ app_version()[:12] }}</span>
+    <p class="disclaimer">
+      We are not affiliated, associated, or in any way officially connected
+      with YNAB, or any of its subsidiaries or its affiliates. The official
+      YNAB website can be found at
+      <a href="https://www.ynab.com" rel="noopener">https://www.ynab.com</a>.
+      The names YNAB and You Need A Budget as well as related names, marks,
+      emblems and images are registered trademarks of YNAB.
+    </p>
+    <p class="hint">
+      <a href="/privacy">Privacy Policy</a>
+      &middot; version {{ app_version()[:12] }}
+    </p>
   </footer>
 </body>
 </html>

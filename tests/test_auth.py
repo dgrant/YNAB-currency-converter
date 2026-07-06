@@ -24,6 +24,21 @@ def test_signup_logs_in_and_login_works_after_logout(app_client):
     assert app_client.get("/conversions").status_code == 200
 
 
+def test_privacy_page_is_public(app_client):
+    response = app_client.get("/privacy")
+    assert response.status_code == 200
+    assert "Privacy Policy" in response.text
+    # Explains handling of YNAB-API data, per the OAuth App Review.
+    assert "YNAB API" in response.text
+
+
+def test_footer_has_trademark_disclaimer(app_client):
+    response = app_client.get("/privacy")
+    assert "not affiliated" in response.text
+    assert "registered trademarks of YNAB" in response.text
+    assert 'href="/privacy"' in response.text
+
+
 def test_signup_validation(app_client):
     token = get_csrf(app_client)
 
