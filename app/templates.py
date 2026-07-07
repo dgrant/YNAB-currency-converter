@@ -23,5 +23,12 @@ def _app_version() -> str:
     return get_settings().app_version
 
 
+def _build_id() -> str:
+    from .config import get_settings
+
+    return get_settings().build_id
+
+
 templates.env.globals["csrf_input"] = csrf_input
 templates.env.globals["app_version"] = _app_version
+templates.env.globals["build_id"] = _build_id

@@ -9,6 +9,14 @@ def _require(name: str) -> str:
     return value
 
 
+def _read_version() -> str:
+    version_path = Path(__file__).resolve().parent.parent / "VERSION"
+    try:
+        return version_path.read_text().strip()
+    except (OSError, UnicodeDecodeError):
+        return "dev"
+
+
 class Settings:
     def __init__(self) -> None:
         self.secret_key = _require("SECRET_KEY")
@@ -38,9 +46,17 @@ class Settings:
             "true",
             "yes",
         )
-        # Git SHA baked into the image at build time (Dockerfile ARG GIT_SHA);
-        # "dev" when running outside the built image.
-        self.app_version = os.environ.get("APP_VERSION", "dev")
+        # Release version: the root VERSION file (gstack four-part
+        # MAJOR.MINOR.PATCH.MICRO), copied into the image alongside app/
+        # (Dockerfile) and present at the repo root for local/dev runs.
+        # APP_VERSION overrides it (tests, unusual deployments).
+        self.app_version = os.environ.get("APP_VERSION") or _read_version()
+        # Build identifier: the git SHA baked into the image at build time
+        # (Dockerfile ARG GIT_SHA / BUILD_ID). Distinct from app_version —
+        # VERSION only bumps on a release, so it can't be used for
+        # cache-busting or exact-commit deploy verification, both of which
+        # need something unique per commit. "dev" outside the built image.
+        self.build_id = os.environ.get("BUILD_ID", "dev")
 
 
 _settings: Settings | None = None

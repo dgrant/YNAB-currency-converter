@@ -119,10 +119,17 @@ servers (see `tests/` and `test_app_flow.py`).
 ## Deploy
 
 Live at **https://fxforynab.davidgrant.ca**. Verify from outside with
-`curl -s https://fxforynab.davidgrant.ca/healthz` → `{"status":"ok","version":"<git sha>"}`
-(plain GET — agent sandbox proxies 405 HEAD requests). The version is baked
-in at image build time (`ARG GIT_SHA`, exported by `autodeploy.sh`), so this
-answers "what's live" without SSH; the page footer shows it too.
+`curl -s https://fxforynab.davidgrant.ca/healthz` → `{"status":"ok","version":"<VERSION file contents>"}`
+(plain GET — agent sandbox proxies 405 HEAD requests). `version` is the
+release version (root `VERSION` file, gstack's `MAJOR.MINOR.PATCH.MICRO`),
+copied into the image at build time and read directly by the app
+(`app/config.py`); the page footer shows it too. It only changes when
+`/ship` bumps `VERSION`, so it answers "what release is live," not "what
+commit" — for that, `autodeploy.sh` checks the running container's
+`git_sha` image label (`docker inspect`) against the commit it just
+deployed, since `GIT_SHA` (baked in via `ARG GIT_SHA` and exported as
+`BUILD_ID`/the label) is the only value guaranteed unique per commit.
+`BUILD_ID` also drives static-asset cache-busting for the same reason.
 
 Docker Compose; the container binds to **127.0.0.1:8000** (not public).
 **Single uvicorn worker (no `--workers`) is a correctness assumption, not just a
@@ -146,8 +153,8 @@ deploy process. CI (`.github/workflows/ci.yml`) runs pytest; a cron job in
 user david's crontab (every 2 min, flock-guarded) runs `deploy/autodeploy.sh`,
 which fast-forwards and rebuilds only when new default-branch commits have
 green checks (no secrets — the server polls public GitHub over HTTPS), then
-health-checks `/healthz` and verifies the reported version matches the
-deployed SHA. Latency ~2 min + build. Logs: `~/autodeploy.log`;
+health-checks `/healthz` and verifies the running container's `git_sha`
+label matches the deployed commit. Latency ~2 min + build. Logs: `~/autodeploy.log`;
 last deployed SHA: `~/YNAB-currency-converter/.last-deployed`. Pause by
 commenting out the crontab line. Manual fallback only:
 `git pull && docker compose up -d --build`.
