@@ -59,14 +59,41 @@ def get_rates_client() -> FrankfurterClient:
     return _rates_client
 
 
+# Sort keys for the conversions list, mapped to a stable sort function. Missing
+# last_synced sorts as empty string (so never-synced rows group together).
+_SORT_KEYS = {
+    "account": lambda c: (c["account_name"] or "").lower(),
+    "plan": lambda c: (c["budget_name"] or "").lower(),
+    "currency": lambda c: (c["from_currency"], c["to_currency"]),
+    "start": lambda c: c["start_date"],
+    "synced": lambda c: c["last_synced"] or "",
+}
+
+
 @router.get("/conversions")
-def index(request: Request, user: User = Depends(require_login)):
+def index(
+    request: Request,
+    user: User = Depends(require_login),
+    sort: str = "",
+    order: str = "asc",
+):
     settings = get_settings()
     has_ynab = ConnectionStore(settings.data_dir).get(user.id) is not None
+    conversions = get_store().load(user.id)
+    if sort in _SORT_KEYS:
+        conversions.sort(key=_SORT_KEYS[sort], reverse=(order == "desc"))
+    # The plan column is noise when every conversion lives in the same plan.
+    single_plan = len({c["budget_name"] for c in conversions}) <= 1
     return templates.TemplateResponse(
         request,
         "index.html",
-        {"conversions": get_store().load(user.id), "has_ynab": has_ynab},
+        {
+            "conversions": conversions,
+            "has_ynab": has_ynab,
+            "sort": sort if sort in _SORT_KEYS else "",
+            "order": "desc" if order == "desc" else "asc",
+            "single_plan": single_plan,
+        },
     )
 
 
@@ -270,6 +297,27 @@ def edit(
     return RedirectResponse(f"/conversions/{conversion_id}", status_code=303)
 
 
+# Real accounts have at most a handful of conversions (one per YNAB account).
+# This cap exists only to stop an attacker-supplied `ids` list from turning
+# one request into an oversized query that ties up a threadpool slot — this
+# app is a single uvicorn worker with a small shared threadpool.
+_MAX_BULK_DELETE = 200
+
+
+@router.post("/conversions/bulk-delete")
+def bulk_delete(
+    user: User = Depends(require_login),
+    ids: list[str] = Form(default=[]),
+):
+    """Delete several conversions at once from the index page's row checkboxes.
+    One connection/transaction, scoped by user_id, so any id not owned by the
+    user is silently skipped."""
+    if len(ids) > _MAX_BULK_DELETE:
+        raise HTTPException(400, f"Too many conversions selected (max {_MAX_BULK_DELETE})")
+    get_store().delete_many(user.id, ids)
+    return RedirectResponse("/conversions", status_code=303)
+
+
 @router.post("/conversions/{conversion_id}/delete")
 def delete(conversion_id: str, user: User = Depends(require_login)):
     get_store().delete(user.id, conversion_id)
@@ -319,6 +367,10 @@ def preview(
                 sum(r["new_milliunits"] for r in rows), conversion["to_currency"]
             ),
         }
+    # Only mark synced once the preview actually succeeded — marking it right
+    # after the transactions fetch would claim "synced" even if the rates
+    # call below fails and the page never renders.
+    get_store().mark_synced(user.id, conversion_id, date.today().isoformat())
     return templates.TemplateResponse(
         request,
         "preview.html",
@@ -430,6 +482,12 @@ async def apply(
                 updated = await run_in_threadpool(
                     ynab.update_transactions, conversion["budget_id"], safe
                 )
+            # Only mark synced once the fetch (and PATCH, if there was one to
+            # send) actually succeeded — marking it before update_transactions
+            # would claim "synced" even if that PATCH then failed.
+            await run_in_threadpool(
+                get_store().mark_synced, user.id, conversion_id, date.today().isoformat()
+            )
     suffix = f"&skipped_splits={skipped_splits}" if skipped_splits else ""
     return RedirectResponse(
         f"/conversions/{conversion_id}?applied={len(updated)}{suffix}", status_code=303

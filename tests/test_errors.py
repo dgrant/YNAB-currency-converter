@@ -267,6 +267,11 @@ def test_apply_drops_transactions_already_actioned_since_preview(app_client):
     assert response.status_code == 303
     assert response.headers["location"].endswith("?applied=0")
     assert not patch_route.called
+    # the fetch+recheck against YNAB did happen (that's how the staleness was
+    # detected) even though nothing ended up safe to PATCH — mark_synced
+    # covers this "nothing to send" branch same as a real PATCH would.
+    from datetime import date
+    assert date.today().isoformat() in app_client.get(f"/conversions/{conversion_id}").text
 
 
 @respx.mock
@@ -366,3 +371,6 @@ def test_rates_down_renders_friendly_page(app_client):
     assert response.status_code == 502
     assert "Exchange-rate error" in response.text
     assert "Nothing was" in response.text
+    # mark_synced only fires after the preview actually renders — a rates
+    # failure must not claim the conversion is synced
+    assert "never" in app_client.get(f"/conversions/{conversion_id}").text

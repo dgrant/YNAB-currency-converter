@@ -1,4 +1,13 @@
 {% extends "base.html" %}
+{# Sortable column header: a link that toggles asc/desc and shows the active arrow. #}
+{% macro sort_th(key, label) %}
+  {% set next_order = "desc" if (sort == key and order == "asc") else "asc" %}
+  <th>
+    <a class="sort" href="/conversions?sort={{ key }}&order={{ next_order }}">
+      {{ label }}{% if sort == key %} <span class="arrow">{{ "▼" if order == "desc" else "▲" }}</span>{% endif %}
+    </a>
+  </th>
+{% endmacro %}
 {% block content %}
 <div class="page-head">
   <h1>Conversions</h1>
@@ -12,34 +21,58 @@
 </div>
 {% endif %}
 {% if conversions %}
-<table>
-  <thead>
-    <tr>
-      <th>Account</th>
-      <th>Plan</th>
-      <th>Currencies</th>
-      <th>Start date</th>
-      <th></th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for c in conversions %}
-    <tr>
-      <td><a href="/conversions/{{ c.id }}">{{ c.account_name }}</a></td>
-      <td>{{ c.budget_name }}</td>
-      <td>{{ c.from_currency }} → {{ c.to_currency }}</td>
-      <td>{{ c.start_date }}</td>
-      <td>
-        <form method="post" action="/conversions/{{ c.id }}/delete"
-              onsubmit="return confirm('Delete this conversion? (YNAB data is not touched.)')">
-          {{ csrf_input(request) }}
-          <button type="submit" class="link danger">Delete</button>
-        </form>
-      </td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
+<form method="post" action="/conversions/bulk-delete" id="bulk-form"
+      onsubmit="return confirm('Delete the selected conversions? (YNAB data is not touched.)')">
+  {{ csrf_input(request) }}
+  <table>
+    <thead>
+      <tr>
+        <th class="check"><input type="checkbox" id="check-all" aria-label="Select all"></th>
+        {{ sort_th("account", "Account") }}
+        {% if not single_plan %}{{ sort_th("plan", "Plan") }}{% endif %}
+        {{ sort_th("currency", "Currencies") }}
+        {{ sort_th("start", "Start date") }}
+        {{ sort_th("synced", "Last synced") }}
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in conversions %}
+      <tr>
+        <td class="check">
+          <input type="checkbox" name="ids" value="{{ c.id }}"
+                 aria-label="Select {{ c.account_name }}">
+        </td>
+        <td><a href="/conversions/{{ c.id }}">{{ c.account_name }}</a></td>
+        {% if not single_plan %}<td>{{ c.budget_name }}</td>{% endif %}
+        <td>{{ c.from_currency }} → {{ c.to_currency }}</td>
+        <td>{{ c.start_date }}</td>
+        <td class="muted">{{ c.last_synced or "never" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="bulk-actions">
+    <button type="submit" class="link danger" id="delete-selected" disabled>Delete selected</button>
+  </div>
+</form>
+{% if single_plan %}
+<p class="hint">All conversions are in <strong>{{ conversions[0].budget_name }}</strong>.</p>
+{% endif %}
+<script>
+  const checkAll = document.getElementById("check-all");
+  const rowChecks = [...document.querySelectorAll('input[name="ids"]')];
+  const deleteBtn = document.getElementById("delete-selected");
+  function refresh() {
+    const anyChecked = rowChecks.some(cb => cb.checked);
+    deleteBtn.disabled = !anyChecked;
+    checkAll.checked = anyChecked && rowChecks.every(cb => cb.checked);
+  }
+  checkAll.addEventListener("change", () => {
+    rowChecks.forEach(cb => { cb.checked = checkAll.checked; });
+    refresh();
+  });
+  rowChecks.forEach(cb => cb.addEventListener("change", refresh));
+</script>
 {% else %}
 <div class="card">
   <p>No conversions configured yet.</p>

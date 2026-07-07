@@ -79,6 +79,236 @@ def mock_budgets(iso_code="USD"):
     )
 
 
+def mock_two_budgets():
+    return respx.get(f"{YNAB}/budgets").mock(
+        return_value=Response(200, json={"data": {"budgets": [
+            {"id": "b1", "name": "My Budget", "currency_format": {"iso_code": "USD"}},
+            {"id": "b2", "name": "Other Plan", "currency_format": {"iso_code": "USD"}},
+        ]}})
+    )
+
+
+def create_conversion(client, token, account_id, account_name,
+                      budget_id="b1", budget_name="My Budget", from_currency="JPY"):
+    response = client.post("/conversions", data={
+        "budget_id": budget_id, "budget_name": budget_name,
+        "account_id": account_id, "account_name": account_name,
+        "from_currency": from_currency, "to_currency": "USD",
+        "start_date": "2024-01-01", "csrf_token": token,
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    return response.headers["location"].rsplit("/", 1)[-1]
+
+
+@respx.mock
+def test_index_sorting(app_client):
+    mock_budgets()
+    token = login(app_client)
+    create_conversion(app_client, token, "a1", "Zebra")
+    create_conversion(app_client, token, "a2", "Alpha")
+
+    # default order is insertion order (Zebra was created first)
+    default = app_client.get("/conversions").text
+    assert default.index("Zebra") < default.index("Alpha")
+
+    # ascending by account name flips them and marks the active column
+    asc = app_client.get("/conversions?sort=account&order=asc").text
+    assert asc.index("Alpha") < asc.index("Zebra")
+    assert "▲" in asc
+    # the header link now offers the opposite direction
+    assert "sort=account&order=desc" in asc
+
+    desc = app_client.get("/conversions?sort=account&order=desc").text
+    assert desc.index("Zebra") < desc.index("Alpha")
+    assert "▼" in desc
+
+    # an unknown sort key is ignored, not a 500
+    assert app_client.get("/conversions?sort=bogus").status_code == 200
+
+
+@respx.mock
+def test_index_sort_by_synced_groups_never_synced(app_client):
+    """The "synced" sort key coalesces a null last_synced to "" (`_SORT_KEYS`
+    in routes/conversions.py) so never-synced rows group together instead of
+    raising on a None/str comparison. Only "account" sorting is exercised by
+    test_index_sorting, so this is the one other key worth pinning down."""
+    mock_budgets()
+    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": []}})
+    )
+    token = login(app_client)
+    synced_id = create_conversion(app_client, token, "a1", "Synced Trip")
+    create_conversion(app_client, token, "a2", "Never Trip")
+    app_client.post(f"/conversions/{synced_id}/preview", data={"csrf_token": token})
+
+    # ascending: the never-synced row ("" sorts first) comes before the dated one
+    asc = app_client.get("/conversions?sort=synced&order=asc").text
+    assert asc.index("Never Trip") < asc.index("Synced Trip")
+
+    # descending flips it
+    desc = app_client.get("/conversions?sort=synced&order=desc").text
+    assert desc.index("Synced Trip") < desc.index("Never Trip")
+
+
+@respx.mock
+def test_plan_column_collapses_to_single_plan(app_client):
+    mock_two_budgets()
+    token = login(app_client)
+    create_conversion(app_client, token, "a1", "Japan Trip")
+
+    # one plan → the Plan column is hidden and a note names it instead
+    single = app_client.get("/conversions").text
+    assert "sort=plan" not in single
+    assert "All conversions are in" in single
+
+    # a second conversion in a different plan brings the column back
+    create_conversion(app_client, token, "a2", "Europe Trip",
+                      budget_id="b2", budget_name="Other Plan")
+    multi = app_client.get("/conversions").text
+    assert "sort=plan" in multi
+    assert "Other Plan" in multi
+    assert "All conversions are in" not in multi
+
+
+@respx.mock
+def test_bulk_delete(app_client):
+    mock_budgets()
+    token = login(app_client)
+    japan = create_conversion(app_client, token, "a1", "Japan Trip")
+    europe = create_conversion(app_client, token, "a2", "Europe Trip")
+    create_conversion(app_client, token, "a3", "Asia Trip")
+
+    # missing CSRF is rejected before anything is deleted
+    assert app_client.post(
+        "/conversions/bulk-delete", data={"ids": [japan]}
+    ).status_code == 403
+
+    response = app_client.post("/conversions/bulk-delete", data={
+        "ids": [japan, europe], "csrf_token": token,
+    }, follow_redirects=False)
+    assert response.status_code == 303
+
+    remaining = app_client.get("/conversions").text
+    assert "Japan Trip" not in remaining
+    assert "Europe Trip" not in remaining
+    assert "Asia Trip" in remaining
+    # a bulk-delete with no ids is a harmless no-op
+    assert app_client.post(
+        "/conversions/bulk-delete", data={"csrf_token": token}, follow_redirects=False
+    ).status_code == 303
+    assert "Asia Trip" in app_client.get("/conversions").text
+
+
+@respx.mock
+def test_bulk_delete_is_scoped_per_user(app_client):
+    """Mirrors test_users_cannot_see_each_others_conversions but for the bulk
+    route: mixing another user's conversion id into the request must not
+    delete it, even though the ids are attacker-controlled form values."""
+    from fastapi.testclient import TestClient
+
+    mock_budgets()
+    alice_token = login(app_client, email="alice@example.com")
+    alice_conversion = create_conversion(app_client, alice_token, "a1", "Japan Trip")
+
+    with TestClient(app_client.app) as bob:
+        bob_token = login(bob, email="bob@example.com")
+        bob_conversion = create_conversion(bob, bob_token, "a1", "Europe Trip")
+
+        response = bob.post("/conversions/bulk-delete", data={
+            "ids": [alice_conversion, bob_conversion], "csrf_token": bob_token,
+        }, follow_redirects=False)
+        assert response.status_code == 303
+        # bob's own conversion is gone...
+        assert bob.get(f"/conversions/{bob_conversion}").status_code == 404
+
+    # ...but alice's is untouched
+    assert app_client.get(f"/conversions/{alice_conversion}").status_code == 200
+
+
+@respx.mock
+def test_bulk_delete_rejects_oversized_id_list(app_client):
+    """An attacker-supplied `ids` list can't be used to make one request churn
+    through an unbounded number of deletes — the route caps it instead."""
+    from app.routes.conversions import _MAX_BULK_DELETE
+
+    mock_budgets()
+    token = login(app_client)
+    conversion_id = create_conversion(app_client, token, "a1", "Japan Trip")
+
+    oversized = [f"fake-id-{i}" for i in range(_MAX_BULK_DELETE + 1)]
+    response = app_client.post(
+        "/conversions/bulk-delete", data={"ids": oversized, "csrf_token": token}
+    )
+    assert response.status_code == 400
+    # nothing was touched — the real conversion survives
+    assert app_client.get(f"/conversions/{conversion_id}").status_code == 200
+
+
+@respx.mock
+def test_bulk_delete_accepts_exactly_the_cap(app_client):
+    """The boundary itself must stay usable — only over the cap is rejected."""
+    from app.routes.conversions import _MAX_BULK_DELETE
+
+    mock_budgets()
+    token = login(app_client)
+    create_conversion(app_client, token, "a1", "Japan Trip")
+
+    at_cap = [f"fake-id-{i}" for i in range(_MAX_BULK_DELETE)]
+    response = app_client.post(
+        "/conversions/bulk-delete", data={"ids": at_cap, "csrf_token": token},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+@respx.mock
+def test_last_synced_recorded_on_preview(app_client):
+    from datetime import date
+
+    mock_budgets()
+    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": []}})
+    )
+    token = login(app_client)
+    conversion_id = create_conversion(app_client, token, "a1", "Japan Trip")
+
+    # never synced yet
+    assert "never" in app_client.get("/conversions").text
+    assert "never" in app_client.get(f"/conversions/{conversion_id}").text
+
+    app_client.post(f"/conversions/{conversion_id}/preview", data={"csrf_token": token})
+
+    today = date.today().isoformat()
+    assert today in app_client.get(f"/conversions/{conversion_id}").text
+    assert today in app_client.get("/conversions").text
+
+
+@respx.mock
+def test_last_synced_not_recorded_when_patch_fails(app_client):
+    """A failed apply must not claim the conversion is synced — mark_synced
+    only fires after update_transactions actually succeeds."""
+    mock_budgets()
+    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": [
+            {"id": "t1", "date": "2024-01-05", "amount": -1817000,
+             "payee_name": "Ramen", "memo": None, "deleted": False},
+        ]}})
+    )
+    respx.patch(f"{YNAB}/budgets/b1/transactions").mock(return_value=Response(500))
+
+    token = login(app_client)
+    conversion_id = create_conversion(app_client, token, "a1", "Japan Trip")
+
+    response = app_client.post(f"/conversions/{conversion_id}/apply", data={
+        "selected": ["t1"], "action_t1": "convert",
+        "original_t1": "-1817000", "amount_t1": "-15990", "memo_t1": "x",
+        "csrf_token": token,
+    })
+    assert response.status_code == 502  # the generic YNAB-error page
+
+    assert "never" in app_client.get(f"/conversions/{conversion_id}").text
+
+
 def test_security_headers_present(app_client):
     response = app_client.get("/login")
     assert response.headers["X-Frame-Options"] == "DENY"
@@ -261,6 +491,9 @@ def test_full_conversion_flow(app_client):
     assert applied.status_code == 200
     assert str(applied.url).endswith(f"/conversions/{conversion_id}?applied=1")
     assert "1 transaction updated in YNAB" in applied.text
+    # apply (not just preview) records last_synced too
+    from datetime import date
+    assert date.today().isoformat() in applied.text
 
     assert patch_route.called
     assert patch_route.calls[0].request.headers["Authorization"] == "Bearer test-token"
@@ -417,6 +650,10 @@ def test_apply_with_nothing_selected_patches_nothing(app_client):
     assert applied.status_code == 200
     assert "0 transactions updated in YNAB" in applied.text
     assert not patch_route.called
+    # an empty selection skips the YNAB round-trip entirely (unlike a
+    # selection that gets filtered down to nothing) — so unlike the
+    # "nothing to send after filtering" branch, this must NOT mark synced
+    assert "never" in app_client.get(f"/conversions/{conversion_id}").text
 
 
 @respx.mock
