@@ -152,7 +152,7 @@ def test_bulk_delete(app_client):
     token = login(app_client)
     japan = create_conversion(app_client, token, "a1", "Japan Trip")
     europe = create_conversion(app_client, token, "a2", "Europe Trip")
-    asia = create_conversion(app_client, token, "a3", "Asia Trip")
+    create_conversion(app_client, token, "a3", "Asia Trip")
 
     # missing CSRF is rejected before anything is deleted
     assert app_client.post(
@@ -173,7 +173,32 @@ def test_bulk_delete(app_client):
         "/conversions/bulk-delete", data={"csrf_token": token}, follow_redirects=False
     ).status_code == 303
     assert "Asia Trip" in app_client.get("/conversions").text
-    _ = asia
+
+
+@respx.mock
+def test_bulk_delete_is_scoped_per_user(app_client):
+    """Mirrors test_users_cannot_see_each_others_conversions but for the bulk
+    route: mixing another user's conversion id into the request must not
+    delete it, even though the ids are attacker-controlled form values."""
+    from fastapi.testclient import TestClient
+
+    mock_budgets()
+    alice_token = login(app_client, email="alice@example.com")
+    alice_conversion = create_conversion(app_client, alice_token, "a1", "Japan Trip")
+
+    with TestClient(app_client.app) as bob:
+        bob_token = login(bob, email="bob@example.com")
+        bob_conversion = create_conversion(bob, bob_token, "a1", "Europe Trip")
+
+        response = bob.post("/conversions/bulk-delete", data={
+            "ids": [alice_conversion, bob_conversion], "csrf_token": bob_token,
+        }, follow_redirects=False)
+        assert response.status_code == 303
+        # bob's own conversion is gone...
+        assert bob.get(f"/conversions/{bob_conversion}").status_code == 404
+
+    # ...but alice's is untouched
+    assert app_client.get(f"/conversions/{alice_conversion}").status_code == 200
 
 
 @respx.mock
@@ -380,6 +405,9 @@ def test_full_conversion_flow(app_client):
     assert applied.status_code == 200
     assert str(applied.url).endswith(f"/conversions/{conversion_id}?applied=1")
     assert "1 transaction updated in YNAB" in applied.text
+    # apply (not just preview) records last_synced too
+    from datetime import date
+    assert date.today().isoformat() in applied.text
 
     assert patch_route.called
     assert patch_route.calls[0].request.headers["Authorization"] == "Bearer test-token"

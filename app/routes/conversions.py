@@ -437,7 +437,11 @@ async def apply(
                 conversion["account_id"],
                 conversion["start_date"],
             )
-            get_store().mark_synced(user.id, conversion_id, date.today().isoformat())
+            # mark_synced is a sync sqlite write; thread it like the YNAB calls
+            # above so it can't stall the event loop either.
+            await run_in_threadpool(
+                get_store().mark_synced, user.id, conversion_id, date.today().isoformat()
+            )
             current_by_id = {t["id"]: t for t in current}
             present_ids = set(current_by_id)
             split_ids = {tid for tid, t in current_by_id.items() if is_split(t)}
