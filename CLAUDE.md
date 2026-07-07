@@ -92,6 +92,15 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
   in `apply()`. Marking it earlier (e.g. right after the initial
   `get_transactions` fetch) means a later failure — a bad FX rate, a rejected
   PATCH — leaves the UI claiming "synced" for a cycle that never completed.
+- **Schema changes need a migration, not just a `SCHEMA` edit** — `CREATE
+  TABLE IF NOT EXISTS` in `db.py` never touches an already-existing table, so
+  adding/changing a column only takes effect on a fresh `data/app.db`. The
+  live deployment's DB is not fresh. Add an idempotent entry to `db.py`'s
+  `_MIGRATIONS` tuple (`(table, column, definition)`); `_apply_migrations`
+  ALTERs it in on every `init()` if the column is missing. See `last_synced`
+  for the pattern, and `tests/test_db.py` for how to test it against a
+  pre-migration schema (a fresh tmp_path DB never exercises the ALTER
+  branch, since `CREATE TABLE IF NOT EXISTS` already includes the column).
 
 ## Dev
 
