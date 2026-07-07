@@ -2,11 +2,15 @@
 
 Reorganized (2026-07) into gstack's canonical template (H3 items with
 What/Why/Context/Effort/Priority, completed items moved to `## Completed`).
-No `VERSION` file exists in this project — it's versioned by git SHA, baked
-into the Docker image at build time and served at `/healthz` (see CLAUDE.md
-"Deploy") — so completed items are annotated with a date instead of a
-semver tag. See CLAUDE.md for conventions that must not break (memo marker
-format, milliunit math, preview→approve contract).
+Versioning uses gstack's four-part `MAJOR.MINOR.PATCH.MICRO` scheme in the
+root `VERSION` file, with human-readable release notes in `CHANGELOG.md`;
+`/healthz` and the page footer report it directly (see CLAUDE.md "Deploy").
+The git SHA baked into the image at build time still exists, but only as
+internal plumbing (cache-busting, exact-commit deploy verification) — it's
+no longer user-facing. Completed items below predate the `VERSION` file and
+stay annotated with a date; new ones can cite a semver.
+See CLAUDE.md for conventions that must not break (memo marker format,
+milliunit math, preview→approve contract).
 
 ## Features
 
@@ -749,6 +753,11 @@ the git SHA baked in at build time (Dockerfile `ARG GIT_SHA`, exported by
 `autodeploy.sh`); the page footer shows it too, and autodeploy verifies
 the live version matches the deployed SHA. The compose file gained a
 `healthcheck:` on it.
+
+**Superseded 2026-07:** `version` now reports the release `VERSION` file
+(gstack's `MAJOR.MINOR.PATCH.MICRO` scheme) instead of the git SHA; the SHA
+moved to an internal `git_sha` image label that `autodeploy.sh` checks for
+exact-commit deploy verification.
 
 **Completed:** 2026-07
 

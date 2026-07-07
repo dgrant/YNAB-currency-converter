@@ -7,6 +7,7 @@ PATCH body sent to YNAB.
 import json
 import re
 import time
+from pathlib import Path
 
 import respx
 from httpx import Response
@@ -323,9 +324,37 @@ def test_login_required(app_client):
 
 
 def test_healthz_public_and_reports_version(app_client):
+    version = (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip()
     response = app_client.get("/healthz")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "version": "dev"}
+    assert response.json() == {"status": "ok", "version": version}
+
+
+def test_healthz_reports_app_version_override(app_client_factory):
+    with app_client_factory(APP_VERSION="9.9.9.9") as client:
+        response = client.get("/healthz")
+        assert response.json() == {"status": "ok", "version": "9.9.9.9"}
+
+
+def test_read_version_falls_back_to_dev_when_unreadable(monkeypatch):
+    import app.config as config
+
+    def boom(self):
+        raise FileNotFoundError()
+
+    monkeypatch.setattr(config.Path, "read_text", boom)
+    assert config._read_version() == "dev"
+
+
+def test_page_uses_build_id_for_cache_bust_and_app_version_for_footer(app_client_factory):
+    # build_id (git SHA) drives cache-busting so static assets refresh every
+    # deploy, not just every release; app_version (semver) is what the footer
+    # shows. Distinguishable values catch either one leaking into the other's spot.
+    with app_client_factory(APP_VERSION="1.2.3.4", BUILD_ID="deadbeef1234") as client:
+        response = client.get("/login")
+        assert "style.css?v=deadbeef1234" in response.text
+        assert "version 1.2.3.4" in response.text
+        assert "style.css?v=1.2.3.4" not in response.text
 
 
 def test_landing_page_is_public(app_client):
