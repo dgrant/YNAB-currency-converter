@@ -92,14 +92,19 @@ shouldn't be silently bypassed.
 **What:** A "N unconverted" badge per row (fetched on demand or by the
 scheduler), turning the static conversions list into a dashboard.
 
-**Why:** Right now the index is just static config — no signal about what
-needs attention.
+**Why:** So you can see at a glance which accounts have new transactions to
+convert and go deal with them. Today the index is just static config — it
+gives no signal about which accounts actually need attention, so you have
+to open each conversion and run a preview to find out.
 
 **Context:** Pairs naturally with the scheduler and `last_synced` work
-already shipped.
+already shipped. Request volume is the thing to watch: a naive
+render-time count fetches transactions for every conversion on each page
+load (see "Cap or chunk large previews / applies" and the ~200/hr YNAB
+budget), so fetch on demand or off the scheduler rather than inline.
 
 **Effort:** M
-**Priority:** P2
+**Priority:** P1
 
 ### Notifications for pending conversions
 
@@ -201,6 +206,60 @@ this kind of swap-in.
 
 ## Correctness & robustness
 
+### Reject same-currency conversions
+
+**What:** Reject creating (or editing) a conversion whose `from_currency`
+equals the plan's derived `to_currency`, and skip such rows in
+batch-create. Ideally surface it in the form UI too (disable/flag the
+matching currency once the plan currency is known).
+
+**Why:** A conversion from a currency to itself is a no-op that can only
+do harm: Frankfurter has no self-pair rate to fetch (so preview errors),
+and even if it returned 1.0 it would rewrite amounts and stamp memos for
+nothing. It's never a valid config, so it should be rejected up front
+rather than failing later at preview.
+
+**Context:** `to_currency` is already derived from the plan
+(`_budget_currency`) rather than posted, and create/edit already reject a
+wrong *direction* mismatch — this is the adjacent equal-currency case that
+check doesn't cover. The natural home is alongside that validation in the
+create/edit handlers in `routes/conversions.py` (a 400, like the existing
+direction check), plus the skip path in batch-create where other invalid
+rows are already dropped rather than failing the whole batch.
+
+**Effort:** S
+**Priority:** P2
+
+### Cap or chunk large previews / applies
+
+**What:** Bound the work a single preview/apply does when a conversion's
+`start_date` pulls in a very large number of transactions — e.g. paginate
+the preview table and split the apply into fixed-size PATCH batches instead
+of one unbounded bulk PATCH.
+
+**Why:** Everything on the preview→apply path scales linearly with
+transaction count and is currently uncapped (unlike bulk-delete, which caps
+at 200 ids). A really old `start_date` on a busy account produces one huge
+preview page whose proposed amounts/memos are all round-tripped through
+hidden form fields (large page + large approve POST), and apply then sends
+every update as a single all-or-nothing PATCH that is never retried — so a
+timeout or rejection on a big batch applies nothing. Request *volume* is
+fine (fetch + rates + PATCH is ~constant regardless of count), so this is
+about payload size and failure blast radius, not rate limits.
+
+**Context:** `preview()` builds one row per pending txn into `preview.html`;
+`apply()` sends `safe` to `ynab.update_transactions` in one PATCH
+(`ynab.py:75`, deliberately not retried). Chunking apply must preserve the
+preview→approve hidden-field contract and the per-conversion apply lock,
+and mark `last_synced` / advance `start_date` only after all chunks
+succeed (or define partial-success semantics). Low urgency: the post-apply
+`start_date` auto-advance means only the *first* oversized run hurts, and
+friends-and-family accounts rarely hit it. Pairs with "Default the start
+date earlier than today," which makes big first previews more common.
+
+**Effort:** M
+**Priority:** P4
+
 ### Shared test for the currency-guess heuristic (Python + JS)
 
 **What:** The account-name-to-currency-code guess (e.g. "Chequing USD" →
@@ -232,7 +291,56 @@ safety issue.)*
 
 ## UX
 
-*(All items in this section are done — see Completed.)*
+### Fewer clicks to convert an account
+
+**What:** Cut the per-account convert path down from three page loads.
+Today it's: click the account on the index → "Preview sync" on the detail
+page → approve on the preview page. At minimum, let the index (or the
+pending-count badge) link straight to the preview, skipping the detail
+page. Ideally offer a one-click "convert this account" that previews and,
+on a clean run, goes straight to approve.
+
+**Why:** Routine syncing is the common case and it's three clicks across
+three pages for a single account — and it multiplies: someone with several
+foreign-currency accounts repeats the whole detail → preview → approve
+dance once per account every sync. It feels tedious when you just want to
+clear the backlog across your accounts.
+
+**Context:** The detail page's only real action is the "Preview sync"
+button (`detail.html` → POST `/conversions/{id}/preview`); the index
+already links each row to the detail page, so pointing that link (or a new
+"Preview" action / the pending-count badge) at the preview POST removes a
+hop. Keep the preview→approve hidden-field contract intact — don't
+auto-apply without showing the proposed amounts/memos at least once, since
+that safety step is deliberate (see CLAUDE.md). Overlaps with "Convert all
+accounts at once" (a combined preview+approve from the index) and "Show
+pending counts" (a badge that deep-links to preview) — worth designing
+these together.
+
+**Effort:** M
+**Priority:** P2
+
+### Default the start date earlier than today
+
+**What:** Prefill the new-conversion and batch-create forms with a start
+date some way in the past (e.g. ~30 days back, or the start of the current
+month) instead of today.
+
+**Why:** `start_date` is the fetch floor — transactions dated before it are
+never pulled. Defaulting to today means a fresh conversion silently ignores
+every transaction already entered before setup, which is exactly the
+backlog a new user wants converted first. They have to notice the default
+and manually pick an earlier date to catch anything.
+
+**Context:** Both defaults currently come from the same `today` value
+(`_form_context` → `date.today().isoformat()`), used in
+`conversion_form.html` and `batch_form.html`. This only changes the
+*prefilled* value; the field stays editable and `_validate_start_date`
+is unaffected. Pick the lookback window (fixed N days vs. start-of-month)
+when building it.
+
+**Effort:** S
+**Priority:** P3
 
 ## Ops / deployment
 
