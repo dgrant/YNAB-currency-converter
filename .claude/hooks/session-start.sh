@@ -31,6 +31,11 @@ fi
 
 GSTACK_DIR="$HOME/.claude/skills/gstack"
 GSTACK_REPO="https://github.com/garrytan/gstack.git"
+# check-gstack.sh (PreToolUse) gates remote sessions on this sentinel, not just
+# on $GSTACK_DIR existing -- a bare clone alone would satisfy a directory
+# check even if ./setup below fails, since gstack's bin/ is committed in its
+# repo. Only this script writes it, and only after ./setup truly succeeds.
+GSTACK_SENTINEL="$HOME/.claude/.gstack-ready"
 
 # Serialize concurrent SessionStart fires (startup/resume/clear/compact) so two
 # instances can't rm -rf the clone out from under each other. Non-blocking: if
@@ -40,6 +45,11 @@ if command -v flock >/dev/null 2>&1 && exec 9>"$HOME/.claude/.gstack-setup.lock"
 fi
 
 echo "[gstack] setting up skill library..." >&2
+
+# Invalidate any sentinel from a prior run before attempting this run's
+# install. It is only rewritten below if ./setup succeeds this time, so a
+# failure here correctly un-blesses a previously-successful install.
+rm -f "$GSTACK_SENTINEL"
 
 # Reuse an existing clone only if it is intact. A clone killed mid-checkout
 # leaves .git but no HEAD; a plain pull can't repair that, so reclone instead.
@@ -75,6 +85,8 @@ fi
 # model's context, so capture it to a log and surface it only on failure.
 _LOG=$(mktemp 2>/dev/null || echo "$HOME/.claude/.gstack-setup.log")
 if ( cd "$GSTACK_DIR" && ./setup --quiet --no-prefix --no-team ) >"$_LOG" 2>&1; then
+  echo "ok $(date -u +%FT%TZ) gstack@$(git -C "$GSTACK_DIR" rev-parse --short HEAD 2>/dev/null)" \
+    > "$GSTACK_SENTINEL" 2>/dev/null || touch "$GSTACK_SENTINEL" 2>/dev/null
   echo "[gstack] ready" >&2
 else
   echo "[gstack] setup failed -- skills may be unavailable this session" >&2
