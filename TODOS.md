@@ -256,7 +256,27 @@ safety issue.)*
 
 ## UX
 
-*(All items in this section are done — see Completed.)*
+### Default the start date earlier than today
+
+**What:** Prefill the new-conversion and batch-create forms with a start
+date some way in the past (e.g. ~30 days back, or the start of the current
+month) instead of today.
+
+**Why:** `start_date` is the fetch floor — transactions dated before it are
+never pulled. Defaulting to today means a fresh conversion silently ignores
+every transaction already entered before setup, which is exactly the
+backlog a new user wants converted first. They have to notice the default
+and manually pick an earlier date to catch anything.
+
+**Context:** Both defaults currently come from the same `today` value
+(`_form_context` → `date.today().isoformat()`), used in
+`conversion_form.html` and `batch_form.html`. This only changes the
+*prefilled* value; the field stays editable and `_validate_start_date`
+is unaffected. Pick the lookback window (fixed N days vs. start-of-month)
+when building it.
+
+**Effort:** S
+**Priority:** P3
 
 ## Ops / deployment
 
