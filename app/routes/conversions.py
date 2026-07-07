@@ -5,6 +5,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse
+from starlette.datastructures import FormData
 
 from .. import oauth
 from ..auth import require_login
@@ -100,6 +101,11 @@ def index(
     )
 
 
+def _plan_currency(budget: dict) -> str:
+    """A budget's own currency code as YNAB reports it, or "" if unset."""
+    return (budget.get("currency_format") or {}).get("iso_code", "")
+
+
 def _form_context(ynab: YNABClient) -> dict:
     """Budgets/accounts/currencies needed by the new & edit conversion forms."""
     budgets = []
@@ -108,7 +114,7 @@ def _form_context(ynab: YNABClient) -> dict:
             {
                 "id": budget["id"],
                 "name": budget["name"],
-                "currency": (budget.get("currency_format") or {}).get("iso_code", ""),
+                "currency": _plan_currency(budget),
                 "accounts": [
                     {"id": a["id"], "name": a["name"]}
                     for a in ynab.get_accounts(budget["id"])
@@ -151,7 +157,7 @@ def _account_index(ynab: YNABClient) -> dict[str, dict]:
     batch-create to resolve names/currency from YNAB rather than the form."""
     index: dict[str, dict] = {}
     for budget in ynab.get_budgets():
-        to_currency = (budget.get("currency_format") or {}).get("iso_code", "")
+        to_currency = _plan_currency(budget)
         for account in ynab.get_accounts(budget["id"]):
             index[account["id"]] = {
                 "budget_id": budget["id"],
@@ -169,7 +175,7 @@ def _budget_currency(ynab: YNABClient, budget_id: str) -> str:
     budget = next((b for b in ynab.get_budgets() if b["id"] == budget_id), None)
     if budget is None:
         raise HTTPException(400, "Unknown plan")
-    currency = (budget.get("currency_format") or {}).get("iso_code", "")
+    currency = _plan_currency(budget)
     if not currency:
         raise HTTPException(400, f"Plan '{budget['name']}' has no currency set in YNAB")
     return currency
@@ -250,6 +256,50 @@ def batch_form(
     )
 
 
+# Same rationale as _MAX_BULK_DELETE below: bounds an attacker-supplied
+# `create` list to a small, real-world-sized batch instead of unbounded work.
+_MAX_BATCH_CREATE = 200
+
+
+def _create_batch(
+    user_id: str, selected: list[str], form: FormData, accounts: dict[str, dict]
+) -> int:
+    """Sync body of batch_create's insert loop, run off the event loop via
+    run_in_threadpool (batch_create is async def for the awaits around it, but
+    sqlite3 writes are blocking — same reason apply() offloads its DB/YNAB
+    calls). form is Starlette's FormData; read-only here, so sharing it with
+    the event loop thread is safe."""
+    used = set(_used_account_ids(user_id))
+    to_create = []
+    for account_id in selected:
+        info = accounts.get(account_id)
+        # Skip anything unknown, already configured, or (defensively) selected
+        # twice — don't fail the whole batch over one bad row.
+        if info is None or account_id in used or not info["to_currency"]:
+            continue
+        start_date = str(form.get(f"start_{account_id}", ""))
+        try:
+            date.fromisoformat(start_date)
+        except ValueError:
+            continue  # malformed/tampered date: skip this row, not the batch
+        from_currency = str(form.get(f"from_{account_id}", "")).upper()
+        if not from_currency:
+            continue
+        to_create.append(
+            {
+                "budget_id": info["budget_id"],
+                "budget_name": info["budget_name"],
+                "account_id": account_id,
+                "account_name": info["account_name"],
+                "from_currency": from_currency,
+                "to_currency": info["to_currency"],
+                "start_date": start_date,
+            }
+        )
+        used.add(account_id)
+    return len(get_store().add_many(user_id, to_create))
+
+
 @router.post("/conversions/batch")
 async def batch_create(
     request: Request,
@@ -260,36 +310,12 @@ async def batch_create(
     selected = [str(a) for a in form.getlist("create")]
     if not selected:
         return RedirectResponse("/conversions", status_code=303)
+    if len(selected) > _MAX_BATCH_CREATE:
+        raise HTTPException(400, f"Too many accounts selected (max {_MAX_BATCH_CREATE})")
     # Resolve plan/name/currency from YNAB, not the form, so those can't be
     # tampered with (same reason to_currency is derived, not posted).
     accounts = await run_in_threadpool(_account_index, ynab)
-    used = set(_used_account_ids(user.id))
-    created = 0
-    for account_id in selected:
-        info = accounts.get(account_id)
-        # Skip anything unknown, already configured, or (defensively) selected
-        # twice — don't fail the whole batch over one bad row.
-        if info is None or account_id in used or not info["to_currency"]:
-            continue
-        start_date = str(form.get(f"start_{account_id}", ""))
-        _validate_start_date(start_date)
-        from_currency = str(form.get(f"from_{account_id}", "")).upper()
-        if not from_currency:
-            continue
-        get_store().add(
-            user.id,
-            {
-                "budget_id": info["budget_id"],
-                "budget_name": info["budget_name"],
-                "account_id": account_id,
-                "account_name": info["account_name"],
-                "from_currency": from_currency,
-                "to_currency": info["to_currency"],
-                "start_date": start_date,
-            },
-        )
-        used.add(account_id)
-        created += 1
+    created = await run_in_threadpool(_create_batch, user.id, selected, form, accounts)
     return RedirectResponse(f"/conversions?created={created}", status_code=303)
 
 
@@ -540,11 +566,21 @@ async def apply(
         # other user's request). This also makes the lock do real work: with
         # the I/O yielding, two concurrent applies genuinely interleave.
         async with _apply_lock(conversion_id):
+            # Re-read start_date fresh now that the per-conversion lock is
+            # held — a concurrent apply on this same conversion (double
+            # submit, two tabs) may have just advanced it, and comparing
+            # against the pre-lock snapshot below could regress the stored
+            # floor backward. Falls back to the pre-lock snapshot in the
+            # (vanishingly unlikely) case the row was deleted concurrently.
+            current_conversion = (
+                await run_in_threadpool(get_store().get, user.id, conversion_id)
+                or conversion
+            )
             current = await run_in_threadpool(
                 ynab.get_transactions,
                 conversion["budget_id"],
                 conversion["account_id"],
-                conversion["start_date"],
+                current_conversion["start_date"],
             )
             current_by_id = {t["id"]: t for t in current}
             present_ids = set(current_by_id)
@@ -596,14 +632,19 @@ async def apply(
             # today (the "rely on last_synced" floor). Same start_date model the
             # app already relies on: transactions dated before it aren't fetched.
             if safe:
-                applied_ids = {u["id"] for u in safe}
+                # Derived from `updated` (YNAB's confirmed response), not
+                # `safe` (what was submitted) — if YNAB's bulk PATCH ever
+                # confirmed fewer transactions than requested, trusting the
+                # request instead of the response could advance the floor
+                # past a transaction that was never actually converted.
+                applied_ids = {t["id"] for t in updated}
                 pending_dates = [
                     t["date"]
                     for t in current
                     if not is_excluded(t) and t["id"] not in applied_ids
                 ]
                 new_start = min(pending_dates) if pending_dates else date.today().isoformat()
-                if new_start > conversion["start_date"]:
+                if new_start > current_conversion["start_date"]:
                     await run_in_threadpool(
                         get_store().set_start_date, user.id, conversion_id, new_start
                     )

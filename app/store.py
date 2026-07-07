@@ -62,6 +62,25 @@ class ConversionStore:
             conn.close()
         return conversion
 
+    def add_many(self, user_id: str, conversions: list[dict]) -> list[dict]:
+        """Insert several conversions in one connection/transaction (see
+        delete_many — same reasoning: batch-create shouldn't open/commit/close
+        a separate connection per row). A no-op for an empty list."""
+        if not conversions:
+            return []
+        prepared = [{"id": uuid.uuid4().hex[:8], **c} for c in conversions]
+        conn = db.connect(self.data_dir)
+        try:
+            conn.executemany(
+                f"INSERT INTO conversions (id, user_id, {', '.join(_FIELDS)}) "
+                f"VALUES (?, ?, {', '.join('?' * len(_FIELDS))})",
+                [(c["id"], user_id, *(c[f] for f in _FIELDS)) for c in prepared],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return prepared
+
     def update(self, user_id: str, conversion_id: str, fields: dict) -> dict | None:
         """Merge fields into an existing conversion; None if it doesn't exist."""
         existing = self.get(user_id, conversion_id)

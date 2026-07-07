@@ -966,6 +966,37 @@ def test_batch_create_conversions(app_client):
 
 
 @respx.mock
+def test_batch_create_skips_row_with_bad_date_not_whole_batch(app_client):
+    """A malformed/tampered start_date on one row must not abort the entire
+    batch (leaving earlier rows already inserted with no feedback) — that row
+    is skipped, like the other defensive skips (unknown/duplicate/no-currency),
+    and every other valid row still gets created."""
+    respx.get(f"{YNAB}/budgets").mock(return_value=Response(200, json={"data": {"budgets": [
+        {"id": "b1", "name": "My Budget", "currency_format": {"iso_code": "USD"}},
+    ]}}))
+    respx.get(f"{YNAB}/budgets/b1/accounts").mock(
+        return_value=Response(200, json={"data": {"accounts": [
+            {"id": "a1", "name": "Japan JPY", "deleted": False, "closed": False},
+            {"id": "a2", "name": "Europe EUR", "deleted": False, "closed": False},
+        ]}})
+    )
+    token = login(app_client)
+
+    response = app_client.post("/conversions/batch", data={
+        "create": ["a1", "a2"],
+        "from_a1": "JPY", "start_a1": "not-a-date",  # malformed: this row is skipped
+        "from_a2": "EUR", "start_a2": "2024-02-01",
+        "csrf_token": token,
+    }, follow_redirects=False)
+    assert response.status_code == 303  # not a 400 — the batch still succeeds
+    assert response.headers["location"] == "/conversions?created=1"
+
+    index = app_client.get("/conversions").text
+    assert "Japan JPY" not in index  # skipped: bad date
+    assert "Europe EUR" in index  # still created
+
+
+@respx.mock
 def test_batch_create_requires_csrf(app_client):
     respx.get(f"{YNAB}/budgets").mock(return_value=Response(200, json={"data": {"budgets": [
         {"id": "b1", "name": "My Budget", "currency_format": {"iso_code": "USD"}},
@@ -980,6 +1011,127 @@ def test_batch_create_requires_csrf(app_client):
         "/conversions/batch", data={"create": ["a1"], "from_a1": "JPY",
                                     "start_a1": "2024-01-01"}
     ).status_code == 403
+
+
+@respx.mock
+def test_batch_create_rejects_oversized_list(app_client):
+    """Mirrors _MAX_BULK_DELETE on bulk-delete: an attacker-supplied `create`
+    list can't be used to make one request churn through unbounded work."""
+    from app.routes.conversions import _MAX_BATCH_CREATE
+
+    respx.get(f"{YNAB}/budgets").mock(return_value=Response(200, json={"data": {"budgets": []}}))
+    token = login(app_client)
+    oversized = [f"fake-id-{i}" for i in range(_MAX_BATCH_CREATE + 1)]
+    response = app_client.post(
+        "/conversions/batch", data={"create": oversized, "csrf_token": token}
+    )
+    assert response.status_code == 400
+
+
+@respx.mock
+def test_create_and_edit_reject_budget_with_no_currency_set(app_client):
+    respx.get(f"{YNAB}/budgets").mock(return_value=Response(200, json={"data": {"budgets": [
+        {"id": "b1", "name": "My Budget", "currency_format": {}},
+    ]}}))
+    token = login(app_client)
+    response = app_client.post("/conversions", data={
+        "budget_id": "b1", "budget_name": "My Budget",
+        "account_id": "a1", "account_name": "Japan Trip",
+        "from_currency": "JPY", "start_date": "2024-01-01", "csrf_token": token,
+    })
+    assert response.status_code == 400
+    assert "has no currency set" in response.text
+
+
+@respx.mock
+def test_apply_start_date_unchanged_when_nothing_actually_applied(app_client):
+    """If every selected row turns out to already be excluded (a stale
+    resubmit — e.g. a double-click or a second tab that already converted it),
+    `safe` ends up empty and the auto-advance branch must not fire, leaving
+    start_date exactly where it was."""
+    mock_budgets()
+    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": [
+            {"id": "t1", "date": "2024-01-05", "amount": -1817000,
+             "payee_name": "Ramen", "memo": "-1,817 JPY (FX rate: 0.0087987)",
+             "deleted": False},
+        ]}})
+    )
+    token = login(app_client)
+    conversion_id = create_conversion(app_client, token, "a1", "Japan Trip")
+    before = _stored_start_date(conversion_id)
+
+    app_client.post(f"/conversions/{conversion_id}/apply", data={
+        "selected": ["t1"], "action_t1": "convert", "original_t1": "-1817000",
+        "amount_t1": "-15990", "memo_t1": "-1,817 JPY (FX rate: 0.0087987)",
+        "csrf_token": token,
+    })
+    assert _stored_start_date(conversion_id) == before
+
+
+@respx.mock
+def test_batch_create_skips_unknown_account_and_missing_currency(app_client):
+    respx.get(f"{YNAB}/budgets").mock(return_value=Response(200, json={"data": {"budgets": [
+        {"id": "b1", "name": "My Budget", "currency_format": {"iso_code": "USD"}},
+    ]}}))
+    respx.get(f"{YNAB}/budgets/b1/accounts").mock(
+        return_value=Response(200, json={"data": {"accounts": [
+            {"id": "a1", "name": "Japan JPY", "deleted": False, "closed": False},
+        ]}})
+    )
+    token = login(app_client)
+    # "bogus-id" isn't a real account; a1 is real but has no from_currency posted
+    response = app_client.post("/conversions/batch", data={
+        "create": ["bogus-id", "a1"], "start_a1": "2024-01-01",
+        "csrf_token": token,
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/conversions?created=0"
+
+
+@respx.mock
+def test_batch_form_hides_plan_with_no_currency(app_client):
+    respx.get(f"{YNAB}/budgets").mock(return_value=Response(200, json={"data": {"budgets": [
+        {"id": "b1", "name": "Good Plan", "currency_format": {"iso_code": "USD"}},
+        {"id": "b2", "name": "Broken Plan", "currency_format": {}},
+    ]}}))
+    respx.get(f"{YNAB}/budgets/b1/accounts").mock(
+        return_value=Response(200, json={"data": {"accounts": [
+            {"id": "a1", "name": "Japan JPY", "deleted": False, "closed": False},
+        ]}})
+    )
+    respx.get(f"{YNAB}/budgets/b2/accounts").mock(
+        return_value=Response(200, json={"data": {"accounts": [
+            {"id": "a2", "name": "Mystery", "deleted": False, "closed": False},
+        ]}})
+    )
+    respx.get(f"{FX}/currencies").mock(return_value=Response(200, json={
+        "JPY": "Japanese Yen", "USD": "US Dollar"}))
+    login(app_client)
+    form = app_client.get("/conversions/batch").text
+    assert "Japan JPY" in form
+    assert "Mystery" not in form  # its plan has no derivable currency
+
+
+@respx.mock
+def test_batch_create_deduplicates_repeated_account_id(app_client):
+    """The account_id "selected twice" guard mentioned in _create_batch's own
+    comment: a duplicated id in the posted list must create one conversion,
+    not two — matching _reject_duplicate_account's invariant elsewhere."""
+    respx.get(f"{YNAB}/budgets").mock(return_value=Response(200, json={"data": {"budgets": [
+        {"id": "b1", "name": "My Budget", "currency_format": {"iso_code": "USD"}},
+    ]}}))
+    respx.get(f"{YNAB}/budgets/b1/accounts").mock(
+        return_value=Response(200, json={"data": {"accounts": [
+            {"id": "a1", "name": "Japan JPY", "deleted": False, "closed": False},
+        ]}})
+    )
+    token = login(app_client)
+    response = app_client.post("/conversions/batch", data={
+        "create": ["a1", "a1"], "from_a1": "JPY", "start_a1": "2024-01-01",
+        "csrf_token": token,
+    }, follow_redirects=False)
+    assert response.headers["location"] == "/conversions?created=1"
 
 
 @respx.mock
