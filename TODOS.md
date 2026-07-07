@@ -201,6 +201,30 @@ this kind of swap-in.
 
 ## Correctness & robustness
 
+### Reject same-currency conversions
+
+**What:** Reject creating (or editing) a conversion whose `from_currency`
+equals the plan's derived `to_currency`, and skip such rows in
+batch-create. Ideally surface it in the form UI too (disable/flag the
+matching currency once the plan currency is known).
+
+**Why:** A conversion from a currency to itself is a no-op that can only
+do harm: Frankfurter has no self-pair rate to fetch (so preview errors),
+and even if it returned 1.0 it would rewrite amounts and stamp memos for
+nothing. It's never a valid config, so it should be rejected up front
+rather than failing later at preview.
+
+**Context:** `to_currency` is already derived from the plan
+(`_budget_currency`) rather than posted, and create/edit already reject a
+wrong *direction* mismatch — this is the adjacent equal-currency case that
+check doesn't cover. The natural home is alongside that validation in the
+create/edit handlers in `routes/conversions.py` (a 400, like the existing
+direction check), plus the skip path in batch-create where other invalid
+rows are already dropped rather than failing the whole batch.
+
+**Effort:** S
+**Priority:** P2
+
 ### Shared test for the currency-guess heuristic (Python + JS)
 
 **What:** The account-name-to-currency-code guess (e.g. "Chequing USD" →
