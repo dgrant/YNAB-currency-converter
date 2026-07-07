@@ -17,14 +17,19 @@ already converted by that service are recognized and never converted again.
 
 ## How it works
 
-1. **Create a conversion** — pick a budget, the foreign-currency account, the
-   original currency, and a start date (your earliest unconverted transaction).
+1. **Create a conversion** — pick a budget, the foreign-currency account, and
+   a start date (your earliest unconverted transaction). The original currency
+   is guessed from the account name, and the currency to convert *into* comes
+   straight from your plan in YNAB. Setting up several accounts? **Batch add**
+   lists every account you haven't configured yet and creates them all at once.
 2. **Preview sync** — fetches the account's transactions from YNAB since the
    start date, skips any whose memo already carries an `(FX rate: …)` marker,
    and shows a table of proposed conversions (date-accurate rates from the
    free [Frankfurter](https://frankfurter.dev) API, ECB data).
 3. **Approve** — untick anything you don't want, approve, and the selected
    transactions are updated in YNAB via the official API in one bulk call.
+   Afterwards the conversion's start date moves forward past everything handled,
+   so future previews stay fast as the account's history grows.
 
 Nothing is written to YNAB without your approval. The app stores no
 transaction data — just accounts (email + password), each user's YNAB

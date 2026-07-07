@@ -55,6 +55,32 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
+def _dedupe_and_index_conversions(conn: sqlite3.Connection) -> None:
+    """Enforce "one conversion per account" at the DB level, closing a
+    check-then-insert race the application-level check alone couldn't (two
+    concurrent requests both passing the "not already used" check before
+    either commits — see TODOS.md). Must run the cleanup BEFORE creating the
+    unique index: creating a UNIQUE index over rows that already violate it
+    would fail outright, and this runs on every init() including against the
+    live production DB, which predates this constraint.
+
+    The cleanup keeps the oldest (lowest rowid) row per (user_id, account_id)
+    pair — the one most likely to already have synced/applied history against
+    it — and deletes any newer duplicates. This never touches YNAB itself,
+    only this app's own conversion config rows. A no-op on a DB with no
+    duplicates (the overwhelming common case, and true for every DB from here
+    on since the index then prevents new ones), so safe to run on every
+    init()."""
+    conn.execute(
+        "DELETE FROM conversions WHERE rowid NOT IN "
+        "(SELECT MIN(rowid) FROM conversions GROUP BY user_id, account_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_conversions_user_account "
+        "ON conversions(user_id, account_id)"
+    )
+
+
 def db_path(data_dir: Path) -> Path:
     return data_dir / "app.db"
 
@@ -75,6 +101,7 @@ def init(data_dir: Path) -> None:
     try:
         conn.executescript(SCHEMA)
         _apply_migrations(conn)
+        _dedupe_and_index_conversions(conn)
         conn.commit()
     finally:
         conn.close()

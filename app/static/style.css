@@ -94,6 +94,11 @@ h1 { font-size: 1.4rem; margin: 0 0 1rem; }
   gap: 1rem;
   margin-bottom: 1rem;
 }
+.head-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
 
 .card {
   background: var(--card);
@@ -187,6 +192,8 @@ td.muted { color: var(--muted); }
 
 .error { color: var(--danger); }
 .hint { color: var(--muted); font-size: 0.9rem; }
+.derived { display: block; font-weight: 600; font-size: 1.05rem; }
+.hint + label, .derived + .hint { margin-top: 0; }
 
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1.25rem; margin: 0 0 1rem; }
 dt { font-weight: 600; }

@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>Batch add conversions</h1>
+  <a href="/conversions">← All conversions</a>
+</div>
+{% if plans %}
+<form method="post" action="/conversions/batch">
+  {{ csrf_input(request) }}
+  <p class="hint">Tick the accounts to watch. Each plan's own currency is the
+     conversion target; the original currency is guessed from the account name —
+     adjust any that are wrong. Only ticked accounts are created.</p>
+  {% for plan in plans %}
+  <div class="card">
+    <h2>{{ plan.name }} <span class="muted">→ {{ plan.currency }}</span></h2>
+    <table>
+      <thead>
+        <tr>
+          <th class="check"><span class="sr-only">Add</span></th>
+          <th>Account</th>
+          <th>Original currency</th>
+          <th>Start date</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for account in plan.accounts %}
+        <tr>
+          <td class="check">
+            <input type="checkbox" name="create" value="{{ account.id }}"
+                   aria-label="Add {{ account.name }}">
+          </td>
+          <td>{{ account.name }}</td>
+          <td>
+            <select name="from_{{ account.id }}" aria-label="Original currency for {{ account.name }}">
+              {% for code, name in currencies.items() %}
+              <option value="{{ code }}"{% if code == account.guess %} selected{% endif %}>{{ code }} — {{ name }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td>
+            <input type="date" name="start_{{ account.id }}" value="{{ today }}"
+                   aria-label="Start date for {{ account.name }}">
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endfor %}
+  <button type="submit" class="primary" id="create-selected" disabled>Create selected</button>
+</form>
+<script>
+  const rowChecks = [...document.querySelectorAll('input[name="create"]')];
+  const createBtn = document.getElementById("create-selected");
+  function refresh() { createBtn.disabled = !rowChecks.some(cb => cb.checked); }
+  rowChecks.forEach(cb => cb.addEventListener("change", refresh));
+</script>
+{% else %}
+<div class="card">
+  <p>Every account already has a conversion — nothing to add here.</p>
+  <p><a href="/conversions">Back to conversions</a></p>
+</div>
+{% endif %}
+{% endblock %}

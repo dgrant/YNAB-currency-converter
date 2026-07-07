@@ -51,24 +51,6 @@ is the remaining feature work to actually convert them instead of skipping.
 **Effort:** L
 **Priority:** P1
 
-### Auto-advance `start_date` after apply
-
-**What:** After a successful apply, bump the stored `start_date` to the
-oldest still-unconverted date (or rely on the new `last_synced` field) to
-keep fetches small as history grows.
-
-**Why:** Every preview refetches all transactions since the original start
-date and re-skips converted ones — this gets slower as an account's history
-grows.
-
-**Context:** The groundwork landed with the last-synced feature
-(`last_synced` column, `store.mark_synced`) — this item can build directly
-on it instead of needing its own field.
-
-**Effort:** S
-**Priority:** P1
-**Depends on:** None (last-synced tracking already shipped)
-
 ### Convert all accounts at once
 
 **What:** Add a "Preview all" on the index page that runs preview for
@@ -146,6 +128,17 @@ no way back except manual YNAB edits.
 **Context:** The memo marker already contains everything needed to
 reverse an apply — this is purely a UI + PATCH feature, no new data model.
 
+**Caveat (worth deciding before building):** the memo records the *display*
+amount (`format_original`, rounded to the currency's minor unit), not the
+original milliunits. For whole/minor-unit amounts the round-trip is exact,
+but a sub-minor-unit original (e.g. a fractional-cent import, `-45.305 EUR`
+stored as `-45305`) would come back rounded (`-45.31` → `-45310`),
+silently corrupting the amount on undo. Options: (a) accept
+display-precision undo and document it, (b) store the original milliunits in
+the DB at apply time for a lossless undo, or (c) only offer undo when the
+parsed amount round-trips to the current YNAB amount. Deferred pending that
+call rather than shipping a silent-corruption path.
+
 **Effort:** M
 **Priority:** P2
 
@@ -163,36 +156,6 @@ out here as its own task.
 **Effort:** M
 **Priority:** P2
 **Depends on:** Shares email infrastructure with Notifications for pending conversions
-
-### Derive the plan currency instead of letting the user set it
-
-**What:** Fetch the budget's currency directly from YNAB
-(`budget_settings.currency_format` / `iso_code` — already fetched to
-validate direction on create) instead of asking the user to pick it.
-
-**Why:** The user-picked value and YNAB's actual plan currency can
-disagree; deriving it removes that whole class of mismatch.
-
-**Context:** The validation check already exists (create/edit reject
-mismatches with a 400) — this just removes the redundant form field.
-
-**Effort:** S
-**Priority:** P2
-
-### Batch-create conversions for multiple accounts at once
-
-**What:** A bulk setup flow listing all accounts (minus those already
-configured) that lets the user create conversions for several at once in a
-single form.
-
-**Why:** Today each conversion is set up one account at a time — tedious
-for a user with many foreign-currency accounts.
-
-**Context:** No blockers; straightforward form/route work following the
-existing conversion_form.html pattern.
-
-**Effort:** M
-**Priority:** P3
 
 ### Manual rate override in preview
 
@@ -238,10 +201,30 @@ this kind of swap-in.
 
 ## Correctness & robustness
 
-*(All items in this section are done — see Completed. No open items
-remain here; the one open correctness item, "Convert split transactions
-properly," is filed under Features above since it's feature work on top of
-an already-fixed safety issue.)*
+### Shared test for the currency-guess heuristic (Python + JS)
+
+**What:** The account-name-to-currency-code guess (e.g. "Chequing USD" →
+preselect USD) is implemented twice — `_guess_currency` in
+`routes/conversions.py` for the batch form, and inline JS in
+`conversion_form.html` for the single new/edit form — with no shared test
+asserting the two agree on the same account names.
+
+**Why:** A future edit to one implementation (e.g. the regex/split logic)
+could silently diverge from the other, so the same account name gets
+guessed differently depending on which form the user is on.
+
+**Context:** Found during review of the batch-create feature (2026-07).
+Not urgent — both implementations are simple and were added together — but
+worth a shared fixture list of account names run through both, or unifying
+on one implementation, before either one changes again.
+
+**Effort:** S
+**Priority:** P3
+
+*(All other items in this section are done — see Completed. The one other
+open correctness item, "Convert split transactions properly," is filed
+under Features above since it's feature work on top of an already-fixed
+safety issue.)*
 
 ## Security
 
@@ -410,6 +393,58 @@ only worth doing if usage actually grows past friends-and-family scale.
 
 ## Completed
 
+### Batch-create conversions for multiple accounts at once
+**(Features)**
+
+Done (2026-07): `/conversions/batch` (GET lists every not-yet-configured
+account across all plans, one row each, with the original currency
+guessed from the account name — `_guess_currency`, the server-side twin of
+the new-form JS — and a start-date default; POST creates all ticked rows in
+one go). Plan/account names and the target currency are resolved from YNAB
+at submit time (`_account_index`), not trusted from the form, same as the
+derived-plan-currency work. Already-configured, unknown, or duplicate rows
+are skipped rather than failing the batch; the index shows an "N created"
+flash and gained a "Batch add" button. Tests: `test_batch_create_conversions`
+(guess preselect, derivation, skip-configured, re-submit skip) and
+`test_batch_create_requires_csrf`.
+
+**Completed:** v0.2.0.0 (2026-07-07)
+
+### Auto-advance `start_date` after apply
+**(Features)**
+
+Done (2026-07): after a successful apply, `apply()` advances the stored
+`start_date` (via the new `store.set_start_date`) up to the oldest
+transaction still needing attention — the min date among fetched
+transactions that are neither excluded (converted/skipped/zero) nor part of
+this apply. That deliberately includes splits we can't convert yet and rows
+left unticked or dropped by the stale/edited re-checks, so the floor never
+advances past anything still pending. When nothing is left pending it moves
+to today (the `last_synced` floor). It only ever moves forward. This is the
+same `start_date`-as-fetch-floor model the app already relies on
+(transactions dated before it are never fetched); a transaction *backdated*
+earlier than the new floor and entered later won't be picked up
+automatically — widen `start_date` via Edit if you backdate. The robust
+fix for that is YNAB delta requests (`last_knowledge_of_server`), noted
+under the scheduler/pending-count items. Tests:
+`test_apply_advances_start_date_*` in `test_app_flow.py`.
+
+**Completed:** v0.2.0.0 (2026-07-07)
+
+### Derive the plan currency instead of letting the user set it
+**(Features)**
+
+Done (2026-07): create/edit now read the target currency straight from the
+plan in YNAB (`_budget_currency`) instead of a form field, so the
+user-picked-vs-actual mismatch can no longer happen. The `to_currency`
+`<select>` is gone from `conversion_form.html`, replaced by a read-only
+display the form's JS fills from `budget.currency`; an unknown budget (or a
+plan with no currency set) is still a 400. Replaces the old
+`_validate_to_currency` mismatch check. Test:
+`test_to_currency_is_derived_from_the_plan`.
+
+**Completed:** v0.2.0.0 (2026-07-07)
+
 ### Skip transactions + "already in budget currency" actions
 **(Features)**
 
@@ -555,6 +590,18 @@ run in FastAPI's threadpool.
 
 Done: the new/edit forms disable accounts that already have a conversion,
 and create/edit reject duplicates server-side with a 409.
+
+**Update (v0.2.0.0, 2026-07-07):** that check alone was a check-then-insert race — two
+concurrent requests (a double-submitted batch-create, or a batch racing a
+single create/edit) could both pass it before either committed, producing
+two conversions for one account. Worse, since `apply()`'s lock is keyed by
+`conversion_id` not `account_id`, applying both duplicates around the same
+time could race to PATCH the same real YNAB transaction with different
+amounts. Closed with a DB-level `UNIQUE INDEX` on `(user_id, account_id)`
+(`db._dedupe_and_index_conversions`), which also does a one-time cleanup of
+any pre-existing duplicates on the live DB (keeps the older row) before the
+index is created — see CLAUDE.md's "Schema changes need a migration" note
+and "One conversion per account, enforced at the DB level" for the pattern.
 
 **Completed:** 2026-07
 
