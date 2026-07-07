@@ -7,6 +7,7 @@ PATCH body sent to YNAB.
 import json
 import re
 import time
+from pathlib import Path
 
 import respx
 from httpx import Response
@@ -323,9 +324,16 @@ def test_login_required(app_client):
 
 
 def test_healthz_public_and_reports_version(app_client):
+    version = (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip()
     response = app_client.get("/healthz")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "version": "dev"}
+    assert response.json() == {"status": "ok", "version": version}
+
+
+def test_healthz_reports_app_version_override(app_client_factory):
+    with app_client_factory(APP_VERSION="9.9.9.9") as client:
+        response = client.get("/healthz")
+        assert response.json() == {"status": "ok", "version": "9.9.9.9"}
 
 
 def test_landing_page_is_public(app_client):

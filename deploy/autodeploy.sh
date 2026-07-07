@@ -64,11 +64,22 @@ else:
     health=$(curl -fsS --max-time 10 http://127.0.0.1:8000/healthz || true)
     [ -n "$health" ] && break
   done
-  case "$health" in
-    *"$remote_sha"*) echo "$(date -Is) deployed $remote_sha, health check OK (version matches)" ;;
-    "") echo "$(date -Is) deployed $remote_sha, WARNING: health check FAILED" ;;
-    *) echo "$(date -Is) deployed $remote_sha, WARNING: healthy but version mismatch" ;;
-  esac
+  if [ -z "$health" ]; then
+    echo "$(date -Is) deployed $remote_sha, WARNING: health check FAILED"
+  else
+    # /healthz reports the release VERSION, not the commit SHA (VERSION only
+    # bumps on /ship, so it can't tell this commit apart from the last few).
+    # Verify the exact commit landed via the running container's git_sha
+    # image label instead (Dockerfile: LABEL git_sha=$GIT_SHA).
+    local cid running_sha
+    cid=$(docker compose ps -q app 2>/dev/null || true)
+    running_sha=$(docker inspect --format '{{ index .Config.Labels "git_sha" }}' "$cid" 2>/dev/null || true)
+    if [ "$running_sha" = "$remote_sha" ]; then
+      echo "$(date -Is) deployed $remote_sha, health check OK (container matches commit)"
+    else
+      echo "$(date -Is) deployed $remote_sha, WARNING: healthy but running commit is ${running_sha:-unknown} (expected $remote_sha)"
+    fi
+  fi
 }
 
 main "$@"

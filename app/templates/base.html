@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Currency Converter for YNAB{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css?v={{ app_version()[:12] }}">
+  <link rel="stylesheet" href="/static/style.css?v={{ build_id()[:12] }}">
 </head>
 <body>
   <header>
@@ -36,7 +36,7 @@
     </p>
     <p class="hint">
       <a href="/privacy">Privacy Policy</a>
-      &middot; version {{ app_version()[:12] }}
+      &middot; version {{ app_version() }}
     </p>
   </footer>
 </body>

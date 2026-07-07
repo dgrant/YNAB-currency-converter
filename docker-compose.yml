@@ -3,9 +3,11 @@ services:
     build:
       context: .
       args:
-        # Baked into the image and reported by /healthz and the page footer.
-        # deploy/autodeploy.sh exports this before building; local builds
-        # fall back to "dev".
+        # Baked in as BUILD_ID (cache-busting) and the git_sha image label
+        # (deploy/autodeploy.sh verifies the exact commit via `docker
+        # inspect` on it). The human-facing version at /healthz and the page
+        # footer comes from the VERSION file instead. deploy/autodeploy.sh
+        # exports this before building; local builds fall back to "dev".
         GIT_SHA: "${GIT_SHA:-dev}"
     ports:
       # Bound to localhost so the app isn't exposed publicly over plain HTTP;
