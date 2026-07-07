@@ -127,6 +127,30 @@ def test_index_sorting(app_client):
 
 
 @respx.mock
+def test_index_sort_by_synced_groups_never_synced(app_client):
+    """The "synced" sort key coalesces a null last_synced to "" (`_SORT_KEYS`
+    in routes/conversions.py) so never-synced rows group together instead of
+    raising on a None/str comparison. Only "account" sorting is exercised by
+    test_index_sorting, so this is the one other key worth pinning down."""
+    mock_budgets()
+    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": []}})
+    )
+    token = login(app_client)
+    synced_id = create_conversion(app_client, token, "a1", "Synced Trip")
+    create_conversion(app_client, token, "a2", "Never Trip")
+    app_client.post(f"/conversions/{synced_id}/preview", data={"csrf_token": token})
+
+    # ascending: the never-synced row ("" sorts first) comes before the dated one
+    asc = app_client.get("/conversions?sort=synced&order=asc").text
+    assert asc.index("Never Trip") < asc.index("Synced Trip")
+
+    # descending flips it
+    desc = app_client.get("/conversions?sort=synced&order=desc").text
+    assert desc.index("Synced Trip") < desc.index("Never Trip")
+
+
+@respx.mock
 def test_plan_column_collapses_to_single_plan(app_client):
     mock_two_budgets()
     token = login(app_client)
@@ -626,6 +650,10 @@ def test_apply_with_nothing_selected_patches_nothing(app_client):
     assert applied.status_code == 200
     assert "0 transactions updated in YNAB" in applied.text
     assert not patch_route.called
+    # an empty selection skips the YNAB round-trip entirely (unlike a
+    # selection that gets filtered down to nothing) — so unlike the
+    # "nothing to send after filtering" branch, this must NOT mark synced
+    assert "never" in app_client.get(f"/conversions/{conversion_id}").text
 
 
 @respx.mock
