@@ -883,6 +883,77 @@ def test_duplicate_account_rejected(app_client):
 
 
 @respx.mock
+def test_batch_create_conversions(app_client):
+    respx.get(f"{YNAB}/budgets").mock(return_value=Response(200, json={"data": {"budgets": [
+        {"id": "b1", "name": "My Budget", "currency_format": {"iso_code": "USD"}},
+    ]}}))
+    respx.get(f"{YNAB}/budgets/b1/accounts").mock(
+        return_value=Response(200, json={"data": {"accounts": [
+            {"id": "a1", "name": "Japan JPY", "deleted": False, "closed": False},
+            {"id": "a2", "name": "Europe EUR", "deleted": False, "closed": False},
+            {"id": "a3", "name": "Rainy Day", "deleted": False, "closed": False},
+        ]}})
+    )
+    respx.get(f"{FX}/currencies").mock(return_value=Response(200, json={
+        "JPY": "Japanese Yen", "EUR": "Euro", "USD": "US Dollar"}))
+    token = login(app_client)
+
+    form = app_client.get("/conversions/batch")
+    assert form.status_code == 200
+    # the original currency guessed from the account name is preselected
+    assert 'value="JPY" selected' in form.text
+    assert 'value="EUR" selected' in form.text
+
+    response = app_client.post("/conversions/batch", data={
+        "create": ["a1", "a2"],  # a3 left unticked
+        "from_a1": "JPY", "start_a1": "2024-01-01",
+        "from_a2": "EUR", "start_a2": "2024-02-01",
+        "from_a3": "USD", "start_a3": "2024-01-01",
+        "csrf_token": token,
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/conversions?created=2"
+
+    index = app_client.get("/conversions?created=2").text
+    assert "2 conversions created" in index
+    assert "Japan JPY" in index and "Europe EUR" in index
+    assert "Rainy Day" not in index  # not ticked, so not created
+    # both targets are derived from the plan currency (USD), not the form
+    assert "JPY → USD" in index
+    assert "EUR → USD" in index
+
+    # the batch form no longer offers the two now-configured accounts
+    form2 = app_client.get("/conversions/batch").text
+    assert "Japan JPY" not in form2 and "Europe EUR" not in form2
+    assert "Rainy Day" in form2
+
+    # re-submitting an already-configured account is a skip, not a 409 that
+    # would fail the whole batch
+    again = app_client.post("/conversions/batch", data={
+        "create": ["a1"], "from_a1": "JPY", "start_a1": "2024-01-01",
+        "csrf_token": token,
+    }, follow_redirects=False)
+    assert again.headers["location"] == "/conversions?created=0"
+
+
+@respx.mock
+def test_batch_create_requires_csrf(app_client):
+    respx.get(f"{YNAB}/budgets").mock(return_value=Response(200, json={"data": {"budgets": [
+        {"id": "b1", "name": "My Budget", "currency_format": {"iso_code": "USD"}},
+    ]}}))
+    respx.get(f"{YNAB}/budgets/b1/accounts").mock(
+        return_value=Response(200, json={"data": {"accounts": [
+            {"id": "a1", "name": "Japan JPY", "deleted": False, "closed": False},
+        ]}})
+    )
+    login(app_client)
+    assert app_client.post(
+        "/conversions/batch", data={"create": ["a1"], "from_a1": "JPY",
+                                    "start_a1": "2024-01-01"}
+    ).status_code == 403
+
+
+@respx.mock
 def test_users_cannot_see_each_others_conversions(app_client):
     from fastapi.testclient import TestClient
 

@@ -153,21 +153,6 @@ out here as its own task.
 **Priority:** P2
 **Depends on:** Shares email infrastructure with Notifications for pending conversions
 
-### Batch-create conversions for multiple accounts at once
-
-**What:** A bulk setup flow listing all accounts (minus those already
-configured) that lets the user create conversions for several at once in a
-single form.
-
-**Why:** Today each conversion is set up one account at a time — tedious
-for a user with many foreign-currency accounts.
-
-**Context:** No blockers; straightforward form/route work following the
-existing conversion_form.html pattern.
-
-**Effort:** M
-**Priority:** P3
-
 ### Manual rate override in preview
 
 **What:** An editable rate per row in preview (recompute amount
@@ -383,6 +368,23 @@ only worth doing if usage actually grows past friends-and-family scale.
 ---
 
 ## Completed
+
+### Batch-create conversions for multiple accounts at once
+**(Features)**
+
+Done (2026-07): `/conversions/batch` (GET lists every not-yet-configured
+account across all plans, one row each, with the original currency
+guessed from the account name — `_guess_currency`, the server-side twin of
+the new-form JS — and a start-date default; POST creates all ticked rows in
+one go). Plan/account names and the target currency are resolved from YNAB
+at submit time (`_account_index`), not trusted from the form, same as the
+derived-plan-currency work. Already-configured, unknown, or duplicate rows
+are skipped rather than failing the batch; the index shows an "N created"
+flash and gained a "Batch add" button. Tests: `test_batch_create_conversions`
+(guess preselect, derivation, skip-configured, re-submit skip) and
+`test_batch_create_requires_csrf`.
+
+**Completed:** 2026-07
 
 ### Auto-advance `start_date` after apply
 **(Features)**

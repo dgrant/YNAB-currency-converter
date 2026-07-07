@@ -11,8 +11,16 @@
 {% block content %}
 <div class="page-head">
   <h1>Conversions</h1>
-  <a class="button primary" href="/conversions/new">New conversion</a>
+  <div class="head-actions">
+    <a class="button" href="/conversions/batch">Batch add</a>
+    <a class="button primary" href="/conversions/new">New conversion</a>
+  </div>
 </div>
+{% if created is not none %}
+<div class="flash">
+  {{ created }} conversion{{ "s" if created != 1 }} created.
+</div>
+{% endif %}
 {% if not has_ynab %}
 <div class="card">
   <p><strong>Connect your YNAB account first.</strong> The app needs access to

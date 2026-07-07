@@ -1,4 +1,5 @@
 import asyncio
+import re
 from datetime import date
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -76,6 +77,7 @@ def index(
     user: User = Depends(require_login),
     sort: str = "",
     order: str = "asc",
+    created: int | None = None,
 ):
     settings = get_settings()
     has_ynab = ConnectionStore(settings.data_dir).get(user.id) is not None
@@ -93,6 +95,7 @@ def index(
             "sort": sort if sort in _SORT_KEYS else "",
             "order": "desc" if order == "desc" else "asc",
             "single_plan": single_plan,
+            "created": created,
         },
     )
 
@@ -130,6 +133,33 @@ def _reject_duplicate_account(
 ) -> None:
     if account_id in _used_account_ids(user_id, except_conversion_id):
         raise HTTPException(409, "That account already has a conversion configured")
+
+
+def _guess_currency(account_name: str, codes: set[str]) -> str:
+    """Server-side twin of the new-form JS guess: if the account name carries a
+    known currency code ("Chequing USD"), offer it as the default. Empty when
+    there's no match — the user picks in that case."""
+    for word in re.split(r"[^A-Za-z]+", account_name.upper()):
+        if word in codes:
+            return word
+    return ""
+
+
+def _account_index(ynab: YNABClient) -> dict[str, dict]:
+    """Every account across every plan, keyed by its (globally unique) YNAB id,
+    with the plan it belongs to and that plan's derived target currency. Used by
+    batch-create to resolve names/currency from YNAB rather than the form."""
+    index: dict[str, dict] = {}
+    for budget in ynab.get_budgets():
+        to_currency = (budget.get("currency_format") or {}).get("iso_code", "")
+        for account in ynab.get_accounts(budget["id"]):
+            index[account["id"]] = {
+                "budget_id": budget["id"],
+                "budget_name": budget["name"],
+                "account_name": account["name"],
+                "to_currency": to_currency,
+            }
+    return index
 
 
 def _budget_currency(ynab: YNABClient, budget_id: str) -> str:
@@ -189,6 +219,78 @@ def create(
         },
     )
     return RedirectResponse(f"/conversions/{conversion['id']}", status_code=303)
+
+
+@router.get("/conversions/batch")
+def batch_form(
+    request: Request,
+    user: User = Depends(require_login),
+    ynab: YNABClient = Depends(require_ynab),
+):
+    """One-shot setup: every not-yet-configured account across all plans, so a
+    user with many foreign-currency accounts can create conversions at once."""
+    used = set(_used_account_ids(user.id))
+    context = _form_context(ynab)
+    codes = set(context["currencies"])
+    plans = []
+    for budget in context["budgets"]:
+        accounts = [
+            {**account, "guess": _guess_currency(account["name"], codes)}
+            for account in budget["accounts"]
+            if account["id"] not in used
+        ]
+        # A plan with no derivable currency can't be a conversion target; drop
+        # its accounts rather than offer a broken row (mirrors create's 400).
+        if accounts and budget["currency"]:
+            plans.append({**budget, "accounts": accounts})
+    return templates.TemplateResponse(
+        request,
+        "batch_form.html",
+        {"plans": plans, "currencies": context["currencies"], "today": context["today"]},
+    )
+
+
+@router.post("/conversions/batch")
+async def batch_create(
+    request: Request,
+    user: User = Depends(require_login),
+    ynab: YNABClient = Depends(require_ynab),
+):
+    form = await request.form()
+    selected = [str(a) for a in form.getlist("create")]
+    if not selected:
+        return RedirectResponse("/conversions", status_code=303)
+    # Resolve plan/name/currency from YNAB, not the form, so those can't be
+    # tampered with (same reason to_currency is derived, not posted).
+    accounts = await run_in_threadpool(_account_index, ynab)
+    used = set(_used_account_ids(user.id))
+    created = 0
+    for account_id in selected:
+        info = accounts.get(account_id)
+        # Skip anything unknown, already configured, or (defensively) selected
+        # twice — don't fail the whole batch over one bad row.
+        if info is None or account_id in used or not info["to_currency"]:
+            continue
+        start_date = str(form.get(f"start_{account_id}", ""))
+        _validate_start_date(start_date)
+        from_currency = str(form.get(f"from_{account_id}", "")).upper()
+        if not from_currency:
+            continue
+        get_store().add(
+            user.id,
+            {
+                "budget_id": info["budget_id"],
+                "budget_name": info["budget_name"],
+                "account_id": account_id,
+                "account_name": info["account_name"],
+                "from_currency": from_currency,
+                "to_currency": info["to_currency"],
+                "start_date": start_date,
+            },
+        )
+        used.add(account_id)
+        created += 1
+    return RedirectResponse(f"/conversions?created={created}", status_code=303)
 
 
 # One asyncio.Lock per conversion, guarding apply's fetch→filter→PATCH section.
