@@ -30,7 +30,8 @@ app/
   rates.py           # FrankfurterClient + RateTable (business-day fallback)
   convert.py         # core: filter unconverted, compute amounts/memos
   import_legacy.py   # one-shot v1 migration: python -m app.import_legacy <email>
-  routes/conversions.py  # list / new / detail / preview / apply (all scoped by user)
+  routes/conversions.py  # list / new / edit / delete / bulk-delete / detail / preview / apply
+                         #   (all scoped by user)
   routes/settings.py     # /settings: OAuth start/callback, disconnect
   templates/ static/
 tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.py is the full HTTP flow
