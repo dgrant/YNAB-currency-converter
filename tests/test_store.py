@@ -73,6 +73,31 @@ def test_mark_synced_is_scoped(tmp_path):
     assert store.get(alice.id, conversion["id"])["last_synced"] is None
 
 
+def test_delete_many(tmp_path):
+    user = make_user(tmp_path)
+    store = ConversionStore(tmp_path)
+    keep = store.add(user.id, CONVERSION)
+    gone1 = store.add(user.id, {**CONVERSION, "account_id": "a2", "account_name": "Trip 2"})
+    gone2 = store.add(user.id, {**CONVERSION, "account_id": "a3", "account_name": "Trip 3"})
+
+    store.delete_many(user.id, [gone1["id"], gone2["id"]])
+    assert [c["id"] for c in store.load(user.id)] == [keep["id"]]
+
+    # a no-op empty list doesn't error
+    store.delete_many(user.id, [])
+    assert [c["id"] for c in store.load(user.id)] == [keep["id"]]
+
+
+def test_delete_many_is_scoped_per_user(tmp_path):
+    alice = make_user(tmp_path, "alice@example.com")
+    bob = make_user(tmp_path, "bob@example.com")
+    store = ConversionStore(tmp_path)
+    conversion = store.add(alice.id, CONVERSION)
+
+    store.delete_many(bob.id, [conversion["id"]])  # scoped no-op
+    assert store.get(alice.id, conversion["id"]) is not None
+
+
 def test_scoping_between_users(tmp_path):
     alice = make_user(tmp_path, "alice@example.com")
     bob = make_user(tmp_path, "bob@example.com")

@@ -92,6 +92,23 @@ class ConversionStore:
         finally:
             conn.close()
 
+    def delete_many(self, user_id: str, conversion_ids: list[str]) -> None:
+        """Delete several conversions in one connection/transaction. Each id is
+        still scoped by user_id, so ids the caller doesn't own are silently
+        skipped, same as delete(). A no-op for an empty list."""
+        if not conversion_ids:
+            return
+        conn = db.connect(self.data_dir)
+        try:
+            placeholders = ", ".join("?" * len(conversion_ids))
+            conn.execute(
+                f"DELETE FROM conversions WHERE user_id = ? AND id IN ({placeholders})",
+                (user_id, *conversion_ids),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def delete(self, user_id: str, conversion_id: str) -> None:
         conn = db.connect(self.data_dir)
         try:

@@ -202,6 +202,25 @@ def test_bulk_delete_is_scoped_per_user(app_client):
 
 
 @respx.mock
+def test_bulk_delete_rejects_oversized_id_list(app_client):
+    """An attacker-supplied `ids` list can't be used to make one request churn
+    through an unbounded number of deletes — the route caps it instead."""
+    from app.routes.conversions import _MAX_BULK_DELETE
+
+    mock_budgets()
+    token = login(app_client)
+    conversion_id = create_conversion(app_client, token, "a1", "Japan Trip")
+
+    oversized = [f"fake-id-{i}" for i in range(_MAX_BULK_DELETE + 1)]
+    response = app_client.post(
+        "/conversions/bulk-delete", data={"ids": oversized, "csrf_token": token}
+    )
+    assert response.status_code == 400
+    # nothing was touched — the real conversion survives
+    assert app_client.get(f"/conversions/{conversion_id}").status_code == 200
+
+
+@respx.mock
 def test_last_synced_recorded_on_preview(app_client):
     from datetime import date
 
@@ -221,6 +240,32 @@ def test_last_synced_recorded_on_preview(app_client):
     today = date.today().isoformat()
     assert today in app_client.get(f"/conversions/{conversion_id}").text
     assert today in app_client.get("/conversions").text
+
+
+@respx.mock
+def test_last_synced_not_recorded_when_patch_fails(app_client):
+    """A failed apply must not claim the conversion is synced — mark_synced
+    only fires after update_transactions actually succeeds."""
+    mock_budgets()
+    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": [
+            {"id": "t1", "date": "2024-01-05", "amount": -1817000,
+             "payee_name": "Ramen", "memo": None, "deleted": False},
+        ]}})
+    )
+    respx.patch(f"{YNAB}/budgets/b1/transactions").mock(return_value=Response(500))
+
+    token = login(app_client)
+    conversion_id = create_conversion(app_client, token, "a1", "Japan Trip")
+
+    response = app_client.post(f"/conversions/{conversion_id}/apply", data={
+        "selected": ["t1"], "action_t1": "convert",
+        "original_t1": "-1817000", "amount_t1": "-15990", "memo_t1": "x",
+        "csrf_token": token,
+    })
+    assert response.status_code == 502  # the generic YNAB-error page
+
+    assert "never" in app_client.get(f"/conversions/{conversion_id}").text
 
 
 def test_security_headers_present(app_client):

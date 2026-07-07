@@ -86,6 +86,12 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
   revoked access token) instead 303s to `/settings?error=revoked` — no error
   page, since the fix is to reconnect, not retry. Idempotent GETs go through
   `app/http.py: get_with_retry`; the PATCH is never retried.
+- **`last_synced`** (`store.mark_synced`) must be written only after the
+  operation it certifies has actually succeeded — after `build_preview` in
+  `preview()`, after `update_transactions` (or the "nothing to send" branch)
+  in `apply()`. Marking it earlier (e.g. right after the initial
+  `get_transactions` fetch) means a later failure — a bad FX rate, a rejected
+  PATCH — leaves the UI claiming "synced" for a cycle that never completed.
 
 ## Dev
 

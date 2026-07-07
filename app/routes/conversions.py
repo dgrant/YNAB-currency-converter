@@ -297,16 +297,24 @@ def edit(
     return RedirectResponse(f"/conversions/{conversion_id}", status_code=303)
 
 
+# Real accounts have at most a handful of conversions (one per YNAB account).
+# This cap exists only to stop an attacker-supplied `ids` list from turning
+# one request into an oversized query that ties up a threadpool slot — this
+# app is a single uvicorn worker with a small shared threadpool.
+_MAX_BULK_DELETE = 200
+
+
 @router.post("/conversions/bulk-delete")
 def bulk_delete(
     user: User = Depends(require_login),
     ids: list[str] = Form(default=[]),
 ):
     """Delete several conversions at once from the index page's row checkboxes.
-    A scoped delete per id, so any id not owned by the user is a silent no-op."""
-    store = get_store()
-    for conversion_id in ids:
-        store.delete(user.id, conversion_id)
+    One connection/transaction, scoped by user_id, so any id not owned by the
+    user is silently skipped."""
+    if len(ids) > _MAX_BULK_DELETE:
+        raise HTTPException(400, f"Too many conversions selected (max {_MAX_BULK_DELETE})")
+    get_store().delete_many(user.id, ids)
     return RedirectResponse("/conversions", status_code=303)
 
 
@@ -327,7 +335,6 @@ def preview(
     transactions = ynab.get_transactions(
         conversion["budget_id"], conversion["account_id"], conversion["start_date"]
     )
-    get_store().mark_synced(user.id, conversion_id, date.today().isoformat())
     pending, skipped_splits = [], 0
     skipped_marked = [
         {"payee_name": t.get("payee_name") or "", "date": t["date"]}
@@ -360,6 +367,10 @@ def preview(
                 sum(r["new_milliunits"] for r in rows), conversion["to_currency"]
             ),
         }
+    # Only mark synced once the preview actually succeeded — marking it right
+    # after the transactions fetch would claim "synced" even if the rates
+    # call below fails and the page never renders.
+    get_store().mark_synced(user.id, conversion_id, date.today().isoformat())
     return templates.TemplateResponse(
         request,
         "preview.html",
@@ -437,11 +448,6 @@ async def apply(
                 conversion["account_id"],
                 conversion["start_date"],
             )
-            # mark_synced is a sync sqlite write; thread it like the YNAB calls
-            # above so it can't stall the event loop either.
-            await run_in_threadpool(
-                get_store().mark_synced, user.id, conversion_id, date.today().isoformat()
-            )
             current_by_id = {t["id"]: t for t in current}
             present_ids = set(current_by_id)
             split_ids = {tid for tid, t in current_by_id.items() if is_split(t)}
@@ -476,6 +482,12 @@ async def apply(
                 updated = await run_in_threadpool(
                     ynab.update_transactions, conversion["budget_id"], safe
                 )
+            # Only mark synced once the fetch (and PATCH, if there was one to
+            # send) actually succeeded — marking it before update_transactions
+            # would claim "synced" even if that PATCH then failed.
+            await run_in_threadpool(
+                get_store().mark_synced, user.id, conversion_id, date.today().isoformat()
+            )
     suffix = f"&skipped_splits={skipped_splits}" if skipped_splits else ""
     return RedirectResponse(
         f"/conversions/{conversion_id}?applied={len(updated)}{suffix}", status_code=303
