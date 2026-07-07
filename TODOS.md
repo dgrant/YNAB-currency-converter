@@ -2,11 +2,14 @@
 
 Reorganized (2026-07) into gstack's canonical template (H3 items with
 What/Why/Context/Effort/Priority, completed items moved to `## Completed`).
-No `VERSION` file exists in this project — it's versioned by git SHA, baked
-into the Docker image at build time and served at `/healthz` (see CLAUDE.md
-"Deploy") — so completed items are annotated with a date instead of a
-semver tag. See CLAUDE.md for conventions that must not break (memo marker
-format, milliunit math, preview→approve contract).
+Release versioning uses gstack's four-part `MAJOR.MINOR.PATCH.MICRO` scheme
+in the root `VERSION` file, with human-readable release notes in
+`CHANGELOG.md`. Runtime identity is separate: the running build still reports
+its git SHA at `/healthz` and in the page footer, baked into the Docker image
+at build time (see CLAUDE.md "Deploy"). Completed items below predate the
+`VERSION` file and stay annotated with a date; new ones can cite a semver.
+See CLAUDE.md for conventions that must not break (memo marker format,
+milliunit math, preview→approve contract).
 
 ## Features
 
