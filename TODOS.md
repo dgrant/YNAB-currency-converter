@@ -408,7 +408,7 @@ flash and gained a "Batch add" button. Tests: `test_batch_create_conversions`
 (guess preselect, derivation, skip-configured, re-submit skip) and
 `test_batch_create_requires_csrf`.
 
-**Completed:** 2026-07
+**Completed:** v0.2.0.0 (2026-07-07)
 
 ### Auto-advance `start_date` after apply
 **(Features)**
@@ -429,7 +429,7 @@ fix for that is YNAB delta requests (`last_knowledge_of_server`), noted
 under the scheduler/pending-count items. Tests:
 `test_apply_advances_start_date_*` in `test_app_flow.py`.
 
-**Completed:** 2026-07
+**Completed:** v0.2.0.0 (2026-07-07)
 
 ### Derive the plan currency instead of letting the user set it
 **(Features)**
@@ -443,7 +443,7 @@ plan with no currency set) is still a 400. Replaces the old
 `_validate_to_currency` mismatch check. Test:
 `test_to_currency_is_derived_from_the_plan`.
 
-**Completed:** 2026-07
+**Completed:** v0.2.0.0 (2026-07-07)
 
 ### Skip transactions + "already in budget currency" actions
 **(Features)**
@@ -591,7 +591,7 @@ run in FastAPI's threadpool.
 Done: the new/edit forms disable accounts that already have a conversion,
 and create/edit reject duplicates server-side with a 409.
 
-**Update (2026-07):** that check alone was a check-then-insert race — two
+**Update (v0.2.0.0, 2026-07-07):** that check alone was a check-then-insert race — two
 concurrent requests (a double-submitted batch-create, or a batch racing a
 single create/edit) could both pass it before either committed, producing
 two conversions for one account. Worse, since `apply()`'s lock is keyed by

@@ -4,6 +4,32 @@ All notable changes to this project are documented here. Versions use gstack's
 four-part `MAJOR.MINOR.PATCH.MICRO` scheme; the canonical version lives in the
 root `VERSION` file. New entries go directly under this header, newest first.
 
+## [0.2.0.0] - 2026-07-07
+
+### Added
+- Batch-add conversions: a new "Batch add" flow lists every YNAB account you
+  haven't set up yet, across all your plans, and lets you create conversions
+  for several at once — with the original currency pre-guessed from each
+  account's name — instead of adding them one at a time.
+
+### Changed
+- The plan currency to convert into is now read directly from YNAB instead
+  of being a field you pick, so it can never disagree with your plan's actual
+  currency. The new/edit conversion form shows it read-only.
+- After you apply a batch of conversions, the conversion's start date now
+  advances past everything that's been handled, so future previews stop
+  refetching already-converted history as an account's history grows. It only
+  ever moves forward, and never past a transaction still waiting to be
+  converted (splits, unticked rows).
+
+### Fixed
+- "One conversion per account" is now enforced at the database level, closing
+  a race where two near-simultaneous requests (a double-submitted batch, or a
+  batch racing a single add) could create duplicate conversions for the same
+  account — which, if both were applied at once, could overwrite each other's
+  edit to the same YNAB transaction with a wrong amount. Any pre-existing
+  duplicates are cleaned up automatically on startup, keeping the older one.
+
 ## [0.1.0.0] - 2026-07-07
 
 Baseline release — establishes versioning and a changelog for the existing
