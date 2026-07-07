@@ -221,6 +221,23 @@ def test_bulk_delete_rejects_oversized_id_list(app_client):
 
 
 @respx.mock
+def test_bulk_delete_accepts_exactly_the_cap(app_client):
+    """The boundary itself must stay usable — only over the cap is rejected."""
+    from app.routes.conversions import _MAX_BULK_DELETE
+
+    mock_budgets()
+    token = login(app_client)
+    create_conversion(app_client, token, "a1", "Japan Trip")
+
+    at_cap = [f"fake-id-{i}" for i in range(_MAX_BULK_DELETE)]
+    response = app_client.post(
+        "/conversions/bulk-delete", data={"ids": at_cap, "csrf_token": token},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+@respx.mock
 def test_last_synced_recorded_on_preview(app_client):
     from datetime import date
 

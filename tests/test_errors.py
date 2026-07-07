@@ -366,3 +366,6 @@ def test_rates_down_renders_friendly_page(app_client):
     assert response.status_code == 502
     assert "Exchange-rate error" in response.text
     assert "Nothing was" in response.text
+    # mark_synced only fires after the preview actually renders — a rates
+    # failure must not claim the conversion is synced
+    assert "never" in app_client.get(f"/conversions/{conversion_id}").text

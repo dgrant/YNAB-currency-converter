@@ -88,6 +88,37 @@ def test_delete_many(tmp_path):
     assert [c["id"] for c in store.load(user.id)] == [keep["id"]]
 
 
+def test_delete_many_with_single_id(tmp_path):
+    """The '?' * n placeholder-building idiom degenerates to a single '?'
+    (no separator) for n=1 — worth locking down explicitly."""
+    user = make_user(tmp_path)
+    store = ConversionStore(tmp_path)
+    keep = store.add(user.id, CONVERSION)
+    gone = store.add(user.id, {**CONVERSION, "account_id": "a2", "account_name": "Trip 2"})
+
+    store.delete_many(user.id, [gone["id"]])
+    assert [c["id"] for c in store.load(user.id)] == [keep["id"]]
+
+
+def test_delete_many_at_cap_size(tmp_path):
+    """Exercises delete_many at the same size as the route's _MAX_BULK_DELETE
+    cap, to catch a placeholder-count mismatch that only shows up at scale."""
+    from app.routes.conversions import _MAX_BULK_DELETE
+
+    user = make_user(tmp_path)
+    store = ConversionStore(tmp_path)
+    keep = store.add(user.id, CONVERSION)
+    ids = [
+        store.add(
+            user.id, {**CONVERSION, "account_id": f"a{i + 2}", "account_name": f"Trip {i}"}
+        )["id"]
+        for i in range(_MAX_BULK_DELETE)
+    ]
+
+    store.delete_many(user.id, ids)
+    assert [c["id"] for c in store.load(user.id)] == [keep["id"]]
+
+
 def test_delete_many_is_scoped_per_user(tmp_path):
     alice = make_user(tmp_path, "alice@example.com")
     bob = make_user(tmp_path, "bob@example.com")
