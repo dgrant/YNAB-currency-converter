@@ -201,10 +201,30 @@ this kind of swap-in.
 
 ## Correctness & robustness
 
-*(All items in this section are done — see Completed. No open items
-remain here; the one open correctness item, "Convert split transactions
-properly," is filed under Features above since it's feature work on top of
-an already-fixed safety issue.)*
+### Shared test for the currency-guess heuristic (Python + JS)
+
+**What:** The account-name-to-currency-code guess (e.g. "Chequing USD" →
+preselect USD) is implemented twice — `_guess_currency` in
+`routes/conversions.py` for the batch form, and inline JS in
+`conversion_form.html` for the single new/edit form — with no shared test
+asserting the two agree on the same account names.
+
+**Why:** A future edit to one implementation (e.g. the regex/split logic)
+could silently diverge from the other, so the same account name gets
+guessed differently depending on which form the user is on.
+
+**Context:** Found during review of the batch-create feature (2026-07).
+Not urgent — both implementations are simple and were added together — but
+worth a shared fixture list of account names run through both, or unifying
+on one implementation, before either one changes again.
+
+**Effort:** S
+**Priority:** P3
+
+*(All other items in this section are done — see Completed. The one other
+open correctness item, "Convert split transactions properly," is filed
+under Features above since it's feature work on top of an already-fixed
+safety issue.)*
 
 ## Security
 
@@ -570,6 +590,18 @@ run in FastAPI's threadpool.
 
 Done: the new/edit forms disable accounts that already have a conversion,
 and create/edit reject duplicates server-side with a 409.
+
+**Update (2026-07):** that check alone was a check-then-insert race — two
+concurrent requests (a double-submitted batch-create, or a batch racing a
+single create/edit) could both pass it before either committed, producing
+two conversions for one account. Worse, since `apply()`'s lock is keyed by
+`conversion_id` not `account_id`, applying both duplicates around the same
+time could race to PATCH the same real YNAB transaction with different
+amounts. Closed with a DB-level `UNIQUE INDEX` on `(user_id, account_id)`
+(`db._dedupe_and_index_conversions`), which also does a one-time cleanup of
+any pre-existing duplicates on the live DB (keeps the older row) before the
+index is created — see CLAUDE.md's "Schema changes need a migration" note
+and "One conversion per account, enforced at the DB level" for the pattern.
 
 **Completed:** 2026-07
 

@@ -21,7 +21,7 @@ from ..convert import (
     is_split,
 )
 from ..rates import FrankfurterClient
-from ..store import ConversionStore
+from ..store import ConversionStore, DuplicateAccountError
 from ..templates import templates
 from ..users import User
 from ..ynab import YNABClient
@@ -212,18 +212,23 @@ def create(
     _validate_start_date(start_date)
     _reject_duplicate_account(user.id, account_id)
     to_currency = _budget_currency(ynab, budget_id)
-    conversion = get_store().add(
-        user.id,
-        {
-            "budget_id": budget_id,
-            "budget_name": budget_name,
-            "account_id": account_id,
-            "account_name": account_name,
-            "from_currency": from_currency.upper(),
-            "to_currency": to_currency,
-            "start_date": start_date,
-        },
-    )
+    try:
+        conversion = get_store().add(
+            user.id,
+            {
+                "budget_id": budget_id,
+                "budget_name": budget_name,
+                "account_id": account_id,
+                "account_name": account_name,
+                "from_currency": from_currency.upper(),
+                "to_currency": to_currency,
+                "start_date": start_date,
+            },
+        )
+    except DuplicateAccountError as exc:
+        # The pre-check above just lost a race to a concurrent request for
+        # the same account — the DB's unique constraint is the real backstop.
+        raise HTTPException(409, "That account already has a conversion configured") from exc
     return RedirectResponse(f"/conversions/{conversion['id']}", status_code=303)
 
 
@@ -240,8 +245,13 @@ def batch_form(
     codes = set(context["currencies"])
     plans = []
     for budget in context["budgets"]:
+        # Exclude the plan's own currency from the guess pool: an account
+        # named e.g. "USD Checking" inside a USD plan should never be
+        # auto-guessed as a same-currency "conversion" (rate ~1, a silent
+        # no-op) — leave the field blank so the user picks deliberately.
+        guess_codes = codes - {budget["currency"]}
         accounts = [
-            {**account, "guess": _guess_currency(account["name"], codes)}
+            {**account, "guess": _guess_currency(account["name"], guess_codes)}
             for account in budget["accounts"]
             if account["id"] not in used
         ]
@@ -405,19 +415,22 @@ def edit(
     _get_conversion_or_404(user.id, conversion_id)
     _reject_duplicate_account(user.id, account_id, except_conversion_id=conversion_id)
     to_currency = _budget_currency(ynab, budget_id)
-    get_store().update(
-        user.id,
-        conversion_id,
-        {
-            "budget_id": budget_id,
-            "budget_name": budget_name,
-            "account_id": account_id,
-            "account_name": account_name,
-            "from_currency": from_currency.upper(),
-            "to_currency": to_currency,
-            "start_date": start_date,
-        },
-    )
+    try:
+        get_store().update(
+            user.id,
+            conversion_id,
+            {
+                "budget_id": budget_id,
+                "budget_name": budget_name,
+                "account_id": account_id,
+                "account_name": account_name,
+                "from_currency": from_currency.upper(),
+                "to_currency": to_currency,
+                "start_date": start_date,
+            },
+        )
+    except DuplicateAccountError as exc:
+        raise HTTPException(409, "That account already has a conversion configured") from exc
     return RedirectResponse(f"/conversions/{conversion_id}", status_code=303)
 
 

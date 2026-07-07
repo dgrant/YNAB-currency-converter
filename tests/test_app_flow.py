@@ -912,6 +912,31 @@ def test_duplicate_account_rejected(app_client):
 
 
 @respx.mock
+def test_duplicate_account_race_past_the_precheck_is_still_409(app_client, monkeypatch):
+    """The app-level pre-check (_reject_duplicate_account) can lose a race to
+    a concurrent request for the same account — this is exactly what the DB's
+    unique constraint backstops. Simulate that race (rather than truly
+    running two concurrent requests) by making the store's write itself raise
+    DuplicateAccountError, and confirm the route still surfaces a clean 409,
+    not an unhandled 500."""
+    from app.store import ConversionStore, DuplicateAccountError
+
+    mock_budgets()
+    token = login(app_client)
+
+    def raise_duplicate(self, user_id, conversion):
+        raise DuplicateAccountError(conversion["account_id"])
+
+    monkeypatch.setattr(ConversionStore, "add", raise_duplicate)
+    response = app_client.post("/conversions", data={
+        "budget_id": "b1", "budget_name": "My Budget",
+        "account_id": "a1", "account_name": "Japan Trip",
+        "from_currency": "JPY", "start_date": "2024-01-01", "csrf_token": token,
+    })
+    assert response.status_code == 409
+
+
+@respx.mock
 def test_batch_create_conversions(app_client):
     respx.get(f"{YNAB}/budgets").mock(return_value=Response(200, json={"data": {"budgets": [
         {"id": "b1", "name": "My Budget", "currency_format": {"iso_code": "USD"}},

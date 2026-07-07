@@ -81,6 +81,17 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
   page — see `get_csrf` in `test_app_flow.py`).
 - **Split transactions are skipped** — `is_split()` in `convert.py`; never
   let apply patch a split parent's top-level amount.
+- **One conversion per account, enforced at the DB level** — a `UNIQUE INDEX`
+  on `conversions(user_id, account_id)` (`db._dedupe_and_index_conversions`)
+  backstops the application-level pre-check (`_reject_duplicate_account`),
+  which alone can lose a race to a concurrent request for the same account.
+  `store.add`/`add_many`/`update` catch the resulting `sqlite3.IntegrityError`
+  and re-raise `store.DuplicateAccountError`; routes convert that to a 409
+  the same way the pre-check does. `add_many` (batch-create) falls back to
+  one-at-a-time inserts on a collision so one rare race doesn't drop the rest
+  of a large batch. Any new write path that can set `account_id` needs the
+  same catch — don't let `DuplicateAccountError`/`IntegrityError` surface as
+  an unhandled 500.
 - **Upstream errors** — raise `YNABError`/`RatesError`; exception handlers in
   `main.py` render `error.html` (429 gets its own copy). A `YNABError` with
   `status_code == 401` (YNAB's documented signal for an invalid/expired/
@@ -102,6 +113,16 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
   for the pattern, and `tests/test_db.py` for how to test it against a
   pre-migration schema (a fresh tmp_path DB never exercises the ALTER
   branch, since `CREATE TABLE IF NOT EXISTS` already includes the column).
+  A *constraint* addition (unique index, etc.) is a second, riskier case:
+  adding it straight to `SCHEMA` would run via `executescript` before any
+  cleanup could happen, so it must instead run as its own post-migration
+  step in `init()` (after `_apply_migrations`) that first makes existing
+  rows satisfy the constraint, then creates it with `IF NOT EXISTS`. See
+  `_dedupe_and_index_conversions` (the `(user_id, account_id)` uniqueness
+  backstop, added because two concurrent requests could otherwise create two
+  conversions for the same account) for the pattern, and its `test_db.py`
+  test for exercising it against a DB that already has the violation the
+  constraint is meant to prevent.
 
 ## Dev
 
