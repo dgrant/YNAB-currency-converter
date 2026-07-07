@@ -225,6 +225,36 @@ rows are already dropped rather than failing the whole batch.
 **Effort:** S
 **Priority:** P2
 
+### Cap or chunk large previews / applies
+
+**What:** Bound the work a single preview/apply does when a conversion's
+`start_date` pulls in a very large number of transactions — e.g. paginate
+the preview table and split the apply into fixed-size PATCH batches instead
+of one unbounded bulk PATCH.
+
+**Why:** Everything on the preview→apply path scales linearly with
+transaction count and is currently uncapped (unlike bulk-delete, which caps
+at 200 ids). A really old `start_date` on a busy account produces one huge
+preview page whose proposed amounts/memos are all round-tripped through
+hidden form fields (large page + large approve POST), and apply then sends
+every update as a single all-or-nothing PATCH that is never retried — so a
+timeout or rejection on a big batch applies nothing. Request *volume* is
+fine (fetch + rates + PATCH is ~constant regardless of count), so this is
+about payload size and failure blast radius, not rate limits.
+
+**Context:** `preview()` builds one row per pending txn into `preview.html`;
+`apply()` sends `safe` to `ynab.update_transactions` in one PATCH
+(`ynab.py:75`, deliberately not retried). Chunking apply must preserve the
+preview→approve hidden-field contract and the per-conversion apply lock,
+and mark `last_synced` / advance `start_date` only after all chunks
+succeed (or define partial-success semantics). Low urgency: the post-apply
+`start_date` auto-advance means only the *first* oversized run hurts, and
+friends-and-family accounts rarely hit it. Pairs with "Default the start
+date earlier than today," which makes big first previews more common.
+
+**Effort:** M
+**Priority:** P4
+
 ### Shared test for the currency-guess heuristic (Python + JS)
 
 **What:** The account-name-to-currency-code guess (e.g. "Chequing USD" →
