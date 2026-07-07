@@ -13,7 +13,7 @@ def _read_version() -> str:
     version_path = Path(__file__).resolve().parent.parent / "VERSION"
     try:
         return version_path.read_text().strip()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return "dev"
 
 

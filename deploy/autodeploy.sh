@@ -70,10 +70,13 @@ else:
     # /healthz reports the release VERSION, not the commit SHA (VERSION only
     # bumps on /ship, so it can't tell this commit apart from the last few).
     # Verify the exact commit landed via the running container's git_sha
-    # image label instead (Dockerfile: LABEL git_sha=$GIT_SHA).
+    # image label instead (Dockerfile: LABEL git_sha=$GIT_SHA). Timeouts
+    # match the curl calls above: a wedged Docker daemon must not hang this
+    # script forever, since cron's `flock -n` would then silently skip
+    # every future run without ever releasing the lock.
     local cid running_sha
-    cid=$(docker compose ps -q app 2>/dev/null || true)
-    running_sha=$(docker inspect --format '{{ index .Config.Labels "git_sha" }}' "$cid" 2>/dev/null || true)
+    cid=$(timeout 10 docker compose ps -q app 2>/dev/null | head -1 || true)
+    running_sha=$(timeout 10 docker inspect --format '{{ index .Config.Labels "git_sha" }}' "$cid" 2>/dev/null || true)
     if [ "$running_sha" = "$remote_sha" ]; then
       echo "$(date -Is) deployed $remote_sha, health check OK (container matches commit)"
     else
