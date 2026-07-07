@@ -25,3 +25,9 @@ Currency Converter for YNAB app.
   configured in `pyproject.toml`.
 - `VERSION` file and this `CHANGELOG.md` following gstack's versioning and
   changelog conventions.
+
+### Changed
+- `/healthz` and the page footer now report the release `VERSION` instead
+  of the deployed git SHA. The SHA still exists internally (cache-busting,
+  and exact-commit deploy verification via a `git_sha` image label checked
+  by `autodeploy.sh`), it's just no longer the user-facing "version."
