@@ -92,14 +92,19 @@ shouldn't be silently bypassed.
 **What:** A "N unconverted" badge per row (fetched on demand or by the
 scheduler), turning the static conversions list into a dashboard.
 
-**Why:** Right now the index is just static config — no signal about what
-needs attention.
+**Why:** So you can see at a glance which accounts have new transactions to
+convert and go deal with them. Today the index is just static config — it
+gives no signal about which accounts actually need attention, so you have
+to open each conversion and run a preview to find out.
 
 **Context:** Pairs naturally with the scheduler and `last_synced` work
-already shipped.
+already shipped. Request volume is the thing to watch: a naive
+render-time count fetches transactions for every conversion on each page
+load (see "Cap or chunk large previews / applies" and the ~200/hr YNAB
+budget), so fetch on demand or off the scheduler rather than inline.
 
 **Effort:** M
-**Priority:** P2
+**Priority:** P1
 
 ### Notifications for pending conversions
 
