@@ -14,6 +14,11 @@
 # Nothing from gstack is vendored into this repo -- only this hook is committed,
 # and it pulls the latest gstack each session.
 #
+# It runs SYNCHRONOUSLY on purpose: the PreToolUse gate blocks skills until the
+# install exists, so the session must not start "ready" before setup finishes.
+# The hook's timeout is raised in settings.json to cover the first-container
+# Playwright download (see below).
+#
 # Docs: https://github.com/garrytan/gstack
 #
 set -uo pipefail
@@ -27,16 +32,28 @@ fi
 GSTACK_DIR="$HOME/.claude/skills/gstack"
 GSTACK_REPO="https://github.com/garrytan/gstack.git"
 
+# Serialize concurrent SessionStart fires (startup/resume/clear/compact) so two
+# instances can't rm -rf the clone out from under each other. Non-blocking: if
+# another instance already holds the lock it is installing, so this one bows out.
+if command -v flock >/dev/null 2>&1 && exec 9>"$HOME/.claude/.gstack-setup.lock"; then
+  flock -n 9 || { echo "[gstack] install already in progress, skipping" >&2; exit 0; }
+fi
+
 echo "[gstack] setting up skill library..." >&2
 
-if [ -d "$GSTACK_DIR/.git" ]; then
-  # Same container, resumed session: refresh in place, tolerate offline.
-  git -C "$GSTACK_DIR" pull --ff-only --quiet 2>/dev/null \
+# Reuse an existing clone only if it is intact. A clone killed mid-checkout
+# leaves .git but no HEAD; a plain pull can't repair that, so reclone instead.
+if [ -d "$GSTACK_DIR/.git" ] && git -C "$GSTACK_DIR" rev-parse --verify -q HEAD >/dev/null 2>&1; then
+  # Same container, resumed session: refresh to latest upstream. Use
+  # fetch+reset (not pull --ff-only) so an upstream force-push still updates
+  # cleanly; tolerate offline by keeping the cached clone.
+  git -C "$GSTACK_DIR" fetch --depth 1 --quiet origin 2>/dev/null \
+    && git -C "$GSTACK_DIR" reset --hard --quiet '@{u}' 2>/dev/null \
     || echo "[gstack] update skipped (using cached clone)" >&2
 else
-  # Fresh container: clone shallow.
+  # Fresh (or corrupt) container: reclone shallow.
   rm -rf "$GSTACK_DIR"
-  if ! git clone --single-branch --depth 1 "$GSTACK_REPO" "$GSTACK_DIR"; then
+  if ! git clone --single-branch --depth 1 "$GSTACK_REPO" "$GSTACK_DIR" >&2; then
     echo "[gstack] clone failed -- skills unavailable this session" >&2
     exit 0
   fi
@@ -48,15 +65,21 @@ fi
 #   --no-team    don't install gstack's own auto-upgrade hook; this hook
 #                already keeps the install fresh each session. (The repo's
 #                team-mode PreToolUse check lives in the project .claude and is
-#                unaffected -- it only needs ~/.claude/skills/gstack/bin to exist,
-#                which this install provides.)
-# gstack pins a specific Playwright Chromium build and downloads it into
-# $PLAYWRIGHT_BROWSERS_PATH on first run; that path is cached, so the download
-# is paid once per container and skipped on resumes.
-if ! ( cd "$GSTACK_DIR" && ./setup --quiet --no-prefix --no-team ); then
+#                unaffected -- it only needs ~/.claude/skills/gstack/bin to exist.)
+#
+# setup requires `bun` (present in the standard web container) and, on a fresh
+# container, downloads a pinned Playwright Chromium (~30-90s) into the cached
+# $PLAYWRIGHT_BROWSERS_PATH -- paid once per container, skipped on resumes.
+#
+# setup is verbose on stdout, and SessionStart injects hook stdout into the
+# model's context, so capture it to a log and surface it only on failure.
+_LOG=$(mktemp 2>/dev/null || echo "$HOME/.claude/.gstack-setup.log")
+if ( cd "$GSTACK_DIR" && ./setup --quiet --no-prefix --no-team ) >"$_LOG" 2>&1; then
+  echo "[gstack] ready" >&2
+else
   echo "[gstack] setup failed -- skills may be unavailable this session" >&2
-  exit 0
+  echo "[gstack] (setup needs 'bun' on PATH; last 15 lines of its log follow)" >&2
+  tail -15 "$_LOG" >&2
 fi
-
-echo "[gstack] ready" >&2
+rm -f "$_LOG"
 exit 0
