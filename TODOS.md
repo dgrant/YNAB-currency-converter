@@ -291,6 +291,33 @@ safety issue.)*
 
 ## UX
 
+### Fewer clicks to convert an account
+
+**What:** Cut the per-account convert path down from three page loads.
+Today it's: click the account on the index → "Preview sync" on the detail
+page → approve on the preview page. At minimum, let the index (or the
+pending-count badge) link straight to the preview, skipping the detail
+page. Ideally offer a one-click "convert this account" that previews and,
+on a clean run, goes straight to approve.
+
+**Why:** Routine syncing is the common case and it's three clicks across
+three pages for a single account. It feels tedious when you just want to
+clear an account's backlog.
+
+**Context:** The detail page's only real action is the "Preview sync"
+button (`detail.html` → POST `/conversions/{id}/preview`); the index
+already links each row to the detail page, so pointing that link (or a new
+"Preview" action / the pending-count badge) at the preview POST removes a
+hop. Keep the preview→approve hidden-field contract intact — don't
+auto-apply without showing the proposed amounts/memos at least once, since
+that safety step is deliberate (see CLAUDE.md). Overlaps with "Convert all
+accounts at once" (a combined preview+approve from the index) and "Show
+pending counts" (a badge that deep-links to preview) — worth designing
+these together.
+
+**Effort:** M
+**Priority:** P2
+
 ### Default the start date earlier than today
 
 **What:** Prefill the new-conversion and batch-create forms with a start
