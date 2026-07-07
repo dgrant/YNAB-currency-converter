@@ -301,8 +301,10 @@ page. Ideally offer a one-click "convert this account" that previews and,
 on a clean run, goes straight to approve.
 
 **Why:** Routine syncing is the common case and it's three clicks across
-three pages for a single account. It feels tedious when you just want to
-clear an account's backlog.
+three pages for a single account — and it multiplies: someone with several
+foreign-currency accounts repeats the whole detail → preview → approve
+dance once per account every sync. It feels tedious when you just want to
+clear the backlog across your accounts.
 
 **Context:** The detail page's only real action is the "Preview sync"
 button (`detail.html` → POST `/conversions/{id}/preview`); the index
