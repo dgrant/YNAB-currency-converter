@@ -47,24 +47,6 @@ is the remaining feature work to actually convert them instead of skipping.
 **Effort:** L
 **Priority:** P1
 
-### Auto-advance `start_date` after apply
-
-**What:** After a successful apply, bump the stored `start_date` to the
-oldest still-unconverted date (or rely on the new `last_synced` field) to
-keep fetches small as history grows.
-
-**Why:** Every preview refetches all transactions since the original start
-date and re-skips converted ones — this gets slower as an account's history
-grows.
-
-**Context:** The groundwork landed with the last-synced feature
-(`last_synced` column, `store.mark_synced`) — this item can build directly
-on it instead of needing its own field.
-
-**Effort:** S
-**Priority:** P1
-**Depends on:** None (last-synced tracking already shipped)
-
 ### Convert all accounts at once
 
 **What:** Add a "Preview all" on the index page that runs preview for
@@ -142,6 +124,17 @@ no way back except manual YNAB edits.
 **Context:** The memo marker already contains everything needed to
 reverse an apply — this is purely a UI + PATCH feature, no new data model.
 
+**Caveat (worth deciding before building):** the memo records the *display*
+amount (`format_original`, rounded to the currency's minor unit), not the
+original milliunits. For whole/minor-unit amounts the round-trip is exact,
+but a sub-minor-unit original (e.g. a fractional-cent import, `-45.305 EUR`
+stored as `-45305`) would come back rounded (`-45.31` → `-45310`),
+silently corrupting the amount on undo. Options: (a) accept
+display-precision undo and document it, (b) store the original milliunits in
+the DB at apply time for a lossless undo, or (c) only offer undo when the
+parsed amount round-trips to the current YNAB amount. Deferred pending that
+call rather than shipping a silent-corruption path.
+
 **Effort:** M
 **Priority:** P2
 
@@ -159,21 +152,6 @@ out here as its own task.
 **Effort:** M
 **Priority:** P2
 **Depends on:** Shares email infrastructure with Notifications for pending conversions
-
-### Derive the plan currency instead of letting the user set it
-
-**What:** Fetch the budget's currency directly from YNAB
-(`budget_settings.currency_format` / `iso_code` — already fetched to
-validate direction on create) instead of asking the user to pick it.
-
-**Why:** The user-picked value and YNAB's actual plan currency can
-disagree; deriving it removes that whole class of mismatch.
-
-**Context:** The validation check already exists (create/edit reject
-mismatches with a 400) — this just removes the redundant form field.
-
-**Effort:** S
-**Priority:** P2
 
 ### Batch-create conversions for multiple accounts at once
 
@@ -405,6 +383,41 @@ only worth doing if usage actually grows past friends-and-family scale.
 ---
 
 ## Completed
+
+### Auto-advance `start_date` after apply
+**(Features)**
+
+Done (2026-07): after a successful apply, `apply()` advances the stored
+`start_date` (via the new `store.set_start_date`) up to the oldest
+transaction still needing attention — the min date among fetched
+transactions that are neither excluded (converted/skipped/zero) nor part of
+this apply. That deliberately includes splits we can't convert yet and rows
+left unticked or dropped by the stale/edited re-checks, so the floor never
+advances past anything still pending. When nothing is left pending it moves
+to today (the `last_synced` floor). It only ever moves forward. This is the
+same `start_date`-as-fetch-floor model the app already relies on
+(transactions dated before it are never fetched); a transaction *backdated*
+earlier than the new floor and entered later won't be picked up
+automatically — widen `start_date` via Edit if you backdate. The robust
+fix for that is YNAB delta requests (`last_knowledge_of_server`), noted
+under the scheduler/pending-count items. Tests:
+`test_apply_advances_start_date_*` in `test_app_flow.py`.
+
+**Completed:** 2026-07
+
+### Derive the plan currency instead of letting the user set it
+**(Features)**
+
+Done (2026-07): create/edit now read the target currency straight from the
+plan in YNAB (`_budget_currency`) instead of a form field, so the
+user-picked-vs-actual mismatch can no longer happen. The `to_currency`
+`<select>` is gone from `conversion_form.html`, replaced by a read-only
+display the form's JS fills from `budget.currency`; an unknown budget (or a
+plan with no currency set) is still a 400. Replaces the old
+`_validate_to_currency` mismatch check. Test:
+`test_to_currency_is_derived_from_the_plan`.
+
+**Completed:** 2026-07
 
 ### Skip transactions + "already in budget currency" actions
 **(Features)**

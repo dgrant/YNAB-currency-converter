@@ -92,6 +92,20 @@ class ConversionStore:
         finally:
             conn.close()
 
+    def set_start_date(self, user_id: str, conversion_id: str, start_date: str) -> None:
+        """Advance the fetch floor after an apply (see routes/conversions.apply).
+        A focused write, not update(), so it can't clobber a concurrent edit of
+        the other fields."""
+        conn = db.connect(self.data_dir)
+        try:
+            conn.execute(
+                "UPDATE conversions SET start_date = ? WHERE user_id = ? AND id = ?",
+                (start_date, user_id, conversion_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def delete_many(self, user_id: str, conversion_ids: list[str]) -> None:
         """Delete several conversions in one connection/transaction. Each id is
         still scoped by user_id, so ids the caller doesn't own are silently

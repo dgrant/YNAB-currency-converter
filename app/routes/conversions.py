@@ -132,19 +132,17 @@ def _reject_duplicate_account(
         raise HTTPException(409, "That account already has a conversion configured")
 
 
-def _validate_to_currency(ynab: YNABClient, budget_id: str, to_currency: str) -> None:
-    """The 'to' currency must be the budget's own currency — check YNAB rather
-    than trusting the form field."""
+def _budget_currency(ynab: YNABClient, budget_id: str) -> str:
+    """The plan's own currency, read straight from YNAB. This is the conversion
+    target — deriving it (rather than trusting a form field) removes the whole
+    class of user-picked-vs-actual mismatch."""
     budget = next((b for b in ynab.get_budgets() if b["id"] == budget_id), None)
     if budget is None:
         raise HTTPException(400, "Unknown plan")
-    budget_currency = (budget.get("currency_format") or {}).get("iso_code", "")
-    if budget_currency and to_currency != budget_currency:
-        raise HTTPException(
-            400,
-            f"Plan '{budget['name']}' uses {budget_currency}; transactions must be "
-            f"converted to {budget_currency}, not {to_currency}",
-        )
+    currency = (budget.get("currency_format") or {}).get("iso_code", "")
+    if not currency:
+        raise HTTPException(400, f"Plan '{budget['name']}' has no currency set in YNAB")
+    return currency
 
 
 @router.get("/conversions/new")
@@ -173,12 +171,11 @@ def create(
     account_id: str = Form(...),
     account_name: str = Form(...),
     from_currency: str = Form(...),
-    to_currency: str = Form(...),
     start_date: str = Form(...),
 ):
     _validate_start_date(start_date)
     _reject_duplicate_account(user.id, account_id)
-    _validate_to_currency(ynab, budget_id, to_currency.upper())
+    to_currency = _budget_currency(ynab, budget_id)
     conversion = get_store().add(
         user.id,
         {
@@ -187,7 +184,7 @@ def create(
             "account_id": account_id,
             "account_name": account_name,
             "from_currency": from_currency.upper(),
-            "to_currency": to_currency.upper(),
+            "to_currency": to_currency,
             "start_date": start_date,
         },
     )
@@ -274,13 +271,12 @@ def edit(
     account_id: str = Form(...),
     account_name: str = Form(...),
     from_currency: str = Form(...),
-    to_currency: str = Form(...),
     start_date: str = Form(...),
 ):
     _validate_start_date(start_date)
     _get_conversion_or_404(user.id, conversion_id)
     _reject_duplicate_account(user.id, account_id, except_conversion_id=conversion_id)
-    _validate_to_currency(ynab, budget_id, to_currency.upper())
+    to_currency = _budget_currency(ynab, budget_id)
     get_store().update(
         user.id,
         conversion_id,
@@ -290,7 +286,7 @@ def edit(
             "account_id": account_id,
             "account_name": account_name,
             "from_currency": from_currency.upper(),
-            "to_currency": to_currency.upper(),
+            "to_currency": to_currency,
             "start_date": start_date,
         },
     )
@@ -488,6 +484,27 @@ async def apply(
             await run_in_threadpool(
                 get_store().mark_synced, user.id, conversion_id, date.today().isoformat()
             )
+            # Advance the fetch floor past everything now handled, so future
+            # previews don't refetch-and-reskip converted history as it grows.
+            # Only ever move it up to the oldest transaction still needing
+            # attention — anything not excluded (converted/skipped/zero) and not
+            # just PATCHed here: splits we can't convert yet, rows the user left
+            # unticked, rows dropped by the stale/edited re-checks. Never past
+            # them, so nothing pending is skipped. If all caught up, advance to
+            # today (the "rely on last_synced" floor). Same start_date model the
+            # app already relies on: transactions dated before it aren't fetched.
+            if safe:
+                applied_ids = {u["id"] for u in safe}
+                pending_dates = [
+                    t["date"]
+                    for t in current
+                    if not is_excluded(t) and t["id"] not in applied_ids
+                ]
+                new_start = min(pending_dates) if pending_dates else date.today().isoformat()
+                if new_start > conversion["start_date"]:
+                    await run_in_threadpool(
+                        get_store().set_start_date, user.id, conversion_id, new_start
+                    )
     suffix = f"&skipped_splits={skipped_splits}" if skipped_splits else ""
     return RedirectResponse(
         f"/conversions/{conversion_id}?applied={len(updated)}{suffix}", status_code=303

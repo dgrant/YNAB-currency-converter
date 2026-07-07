@@ -503,6 +503,104 @@ def test_full_conversion_flow(app_client):
     ]}
 
 
+def _stored_start_date(conversion_id, email=EMAIL):
+    from app.config import get_settings
+    from app.store import ConversionStore
+    from app.users import UserStore, normalize_email
+
+    data_dir = get_settings().data_dir
+    user = UserStore(data_dir).get_by_email(normalize_email(email))
+    return ConversionStore(data_dir).get(user.id, conversion_id)["start_date"]
+
+
+@respx.mock
+def test_apply_advances_start_date_to_oldest_pending(app_client):
+    """After a successful apply, the fetch floor moves up to the oldest
+    transaction still needing attention — never past it — so future previews
+    stop refetching converted history but nothing pending is skipped."""
+    mock_budgets()
+    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": [
+            {"id": "t1", "date": "2024-01-05", "amount": -1817000,
+             "payee_name": "Ramen", "memo": None, "deleted": False},
+            # left unticked below — still pending, so the floor must stop here
+            {"id": "t2", "date": "2024-02-10", "amount": -2000000,
+             "payee_name": "Hotel", "memo": None, "deleted": False},
+        ]}})
+    )
+    respx.patch(f"{YNAB}/budgets/b1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": [{"id": "t1"}]}})
+    )
+    token = login(app_client)
+    conversion_id = create_conversion(app_client, token, "a1", "Japan Trip")
+    assert _stored_start_date(conversion_id) == "2024-01-01"
+
+    app_client.post(f"/conversions/{conversion_id}/apply", data={
+        "selected": ["t1"], "action_t1": "convert", "original_t1": "-1817000",
+        "amount_t1": "-15990", "memo_t1": "-1,817 JPY (FX rate: 0.0087987)",
+        "csrf_token": token,
+    })
+    # advanced to t2's date (the oldest still-pending), not past it, not to today
+    assert _stored_start_date(conversion_id) == "2024-02-10"
+
+
+@respx.mock
+def test_apply_advances_start_date_to_today_when_caught_up(app_client):
+    """With nothing left pending after the apply, the floor advances to today
+    (the last_synced floor) so the account isn't refetched from its origin."""
+    from datetime import date
+
+    mock_budgets()
+    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": [
+            {"id": "t1", "date": "2024-01-05", "amount": -1817000,
+             "payee_name": "Ramen", "memo": None, "deleted": False},
+        ]}})
+    )
+    respx.patch(f"{YNAB}/budgets/b1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": [{"id": "t1"}]}})
+    )
+    token = login(app_client)
+    conversion_id = create_conversion(app_client, token, "a1", "Japan Trip")
+
+    app_client.post(f"/conversions/{conversion_id}/apply", data={
+        "selected": ["t1"], "action_t1": "convert", "original_t1": "-1817000",
+        "amount_t1": "-15990", "memo_t1": "-1,817 JPY (FX rate: 0.0087987)",
+        "csrf_token": token,
+    })
+    assert _stored_start_date(conversion_id) == date.today().isoformat()
+
+
+@respx.mock
+def test_apply_does_not_advance_start_date_past_a_split(app_client):
+    """A split can't be converted yet, so the floor must not jump past it even
+    though it wasn't part of the apply — otherwise it'd never be seen again."""
+    mock_budgets()
+    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": [
+            {"id": "t1", "date": "2024-01-05", "amount": -1817000,
+             "payee_name": "Ramen", "memo": None, "deleted": False},
+            {"id": "t2", "date": "2024-01-20", "amount": -3000000,
+             "payee_name": "Combini", "memo": None, "deleted": False,
+             "subtransactions": [{"id": "s1", "amount": -1000000},
+                                 {"id": "s2", "amount": -2000000}]},
+        ]}})
+    )
+    respx.patch(f"{YNAB}/budgets/b1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": [{"id": "t1"}]}})
+    )
+    token = login(app_client)
+    conversion_id = create_conversion(app_client, token, "a1", "Japan Trip")
+
+    app_client.post(f"/conversions/{conversion_id}/apply", data={
+        "selected": ["t1"], "action_t1": "convert", "original_t1": "-1817000",
+        "amount_t1": "-15990", "memo_t1": "-1,817 JPY (FX rate: 0.0087987)",
+        "csrf_token": token,
+    })
+    # stops at the split's date, not today
+    assert _stored_start_date(conversion_id) == "2024-01-20"
+
+
 @respx.mock
 def test_already_in_budget_currency_and_skip_actions(app_client):
     mock_budgets()
@@ -680,6 +778,11 @@ def test_edit_conversion(app_client):
     new_form = app_client.get("/conversions/new")
     assert new_form.status_code == 200
     assert "New conversion" in new_form.text
+    # the target currency is no longer a user-picked field — it's derived from
+    # the plan and shown read-only, filled in by the form's JS from budget.currency
+    assert 'name="to_currency"' not in new_form.text
+    assert 'id="to_currency_display"' in new_form.text
+    assert "toCurrencyDisplay.textContent" in new_form.text
 
     response = app_client.post("/conversions", data={
         "budget_id": "b1", "budget_name": "My Budget",
@@ -725,24 +828,27 @@ def test_edit_conversion(app_client):
 
 
 @respx.mock
-def test_to_currency_must_match_budget_currency(app_client):
-    # The budget is USD, so a conversion "to EUR" is a form mismatch -> 400
-    mock_budgets(iso_code="USD")
+def test_to_currency_is_derived_from_the_plan(app_client):
+    # The target currency is read from the plan in YNAB, not the form: the
+    # budget is EUR, so the stored to_currency is EUR regardless of anything
+    # the form sends. This removes the whole user-picked-vs-actual mismatch.
+    mock_budgets(iso_code="EUR")
     token = login(app_client)
     response = app_client.post("/conversions", data={
         "budget_id": "b1", "budget_name": "My Budget",
         "account_id": "a1", "account_name": "Japan Trip",
-        "from_currency": "JPY", "to_currency": "EUR",
+        "from_currency": "JPY",  # no to_currency field is submitted anymore
         "start_date": "2024-01-01", "csrf_token": token,
-    })
-    assert response.status_code == 400
-    assert "uses USD" in response.text
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    conversion_id = response.headers["location"].rsplit("/", 1)[-1]
+    assert "JPY → EUR" in app_client.get(f"/conversions/{conversion_id}").text
 
-    # an unknown budget id is rejected too
+    # an unknown budget id is still rejected — we can't derive its currency
     response = app_client.post("/conversions", data={
         "budget_id": "nope", "budget_name": "Ghost",
         "account_id": "a9", "account_name": "Ghost account",
-        "from_currency": "JPY", "to_currency": "USD",
+        "from_currency": "JPY",
         "start_date": "2024-01-01", "csrf_token": token,
     })
     assert response.status_code == 400

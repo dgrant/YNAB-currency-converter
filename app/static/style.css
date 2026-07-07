@@ -187,6 +187,8 @@ td.muted { color: var(--muted); }
 
 .error { color: var(--danger); }
 .hint { color: var(--muted); font-size: 0.9rem; }
+.derived { display: block; font-weight: 600; font-size: 1.05rem; }
+.hint + label, .derived + .hint { margin-top: 0; }
 
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1.25rem; margin: 0 0 1rem; }
 dt { font-weight: 600; }
