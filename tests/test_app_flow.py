@@ -152,6 +152,36 @@ def test_index_sort_by_synced_groups_never_synced(app_client):
 
 
 @respx.mock
+def test_preview_all_button_is_a_refresh_when_caught_up(app_client):
+    """When every conversion has been checked and nothing is pending, the
+    Preview-all button must stay clickable and read "Refresh" — not the old
+    disabled "Nothing pending" (which left no way to re-check for newly added
+    transactions). Before any check it reads "Preview all"."""
+    mock_budgets()
+    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": []}})
+    )
+    token = login(app_client)
+    conv_id = create_conversion(app_client, token, "a1", "Japan Trip")
+
+    # Never checked yet: the button invites a first pass, never "Refresh".
+    fresh = app_client.get("/conversions").text
+    assert "Preview all" in fresh
+    assert "Refresh" not in fresh
+    assert "Nothing pending" not in fresh
+
+    # Check it (0 pending). Now the button is a live "Refresh", not disabled.
+    app_client.post(f"/conversions/{conv_id}/preview", data={"csrf_token": token})
+    caught_up = app_client.get("/conversions").text
+    assert "Refresh" in caught_up
+    assert "Nothing pending" not in caught_up
+    # The old bug: the caught-up button carried `disabled`. It must not now.
+    btn = re.search(r'id="preview-all-btn"[^>]*>', caught_up)
+    assert btn is not None
+    assert "disabled" not in btn.group(0)
+
+
+@respx.mock
 def test_plan_column_collapses_to_single_plan(app_client):
     mock_two_budgets()
     token = login(app_client)
