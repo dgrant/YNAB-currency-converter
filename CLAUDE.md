@@ -143,12 +143,17 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
 
 ## Dev
 
+Dependencies are managed with [uv](https://docs.astral.sh/uv/): runtime deps
+live in `pyproject.toml`'s `[project.dependencies]`, dev tools in the `dev`
+[dependency group](https://docs.astral.sh/uv/concepts/projects/dependencies/#dependency-groups),
+and exact versions are pinned in `uv.lock`. `uv sync` installs both groups.
+
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/pytest
-.venv/bin/ruff check . && .venv/bin/mypy   # CI runs these too — keep them green
+uv sync   # creates .venv, installs runtime + dev deps from uv.lock
+uv run pytest
+uv run ruff check . && uv run mypy   # CI runs these too — keep them green
 # run locally (SECRET_KEY is the only required env var):
-SECRET_KEY=y .venv/bin/uvicorn app.main:app --port 8000
+SECRET_KEY=y uv run uvicorn app.main:app --port 8000
 ```
 
 `YNAB_API_BASE` / `FRANKFURTER_API_BASE` env vars let tests point at mock

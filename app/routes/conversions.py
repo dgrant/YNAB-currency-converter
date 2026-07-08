@@ -1,6 +1,6 @@
 import asyncio
 import re
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -92,7 +92,7 @@ def _relative_time(iso: str | None, now: datetime) -> str | None:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     secs = (now - dt).total_seconds()
     if secs < 60:
         return "just now"
@@ -111,7 +111,7 @@ def _is_stale(checked_at: str | None, now: datetime) -> bool:
     except ValueError:
         return True
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return (now - dt).total_seconds() > _ONLOAD_STALE_SECONDS
 
 
@@ -128,7 +128,7 @@ def _maybe_onload_refresh(user: User, conversions: list[dict]) -> bool:
     conn_store = ConnectionStore(settings.data_dir)
     if conn_store.get(user.id) is None:
         return False
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     stale = [c for c in conversions if _is_stale(c.get("pending_checked_at"), now)]
     if not stale:
         return False
@@ -186,7 +186,7 @@ def index(
         conversions.sort(key=lambda c: c["pending_count"] or 0, reverse=True)
     # The plan column is noise when every conversion lives in the same plan.
     single_plan = len({c["budget_name"] for c in conversions}) <= 1
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for c in conversions:
         c["pending_checked_ago"] = _relative_time(c.get("pending_checked_at"), now)
     total_pending = sum(c["pending_count"] or 0 for c in conversions)
@@ -573,7 +573,7 @@ def delete(conversion_id: str, user: User = Depends(require_login)):
 
 
 def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _build_group(ynab: YNABClient, conversion: dict) -> dict:
