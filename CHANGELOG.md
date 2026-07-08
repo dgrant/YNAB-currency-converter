@@ -4,6 +4,15 @@ All notable changes to this project are documented here. Versions use gstack's
 four-part `MAJOR.MINOR.PATCH.MICRO` scheme; the canonical version lives in the
 root `VERSION` file. New entries go directly under this header, newest first.
 
+## [0.2.0.1] - 2026-07-07
+
+### Fixed
+- Email input on the login and signup pages rendered with browser defaults
+  (narrow, wrong font, no rounded corners) instead of the app's form styling,
+  because the input style rule only matched `password`, `date`, and `select`.
+  The rule now also covers `email`, `text`, and `number` inputs so every
+  text-entry field looks consistent.
+
 ## [0.2.0.0] - 2026-07-07
 
 ### Added
