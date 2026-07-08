@@ -278,6 +278,29 @@ def test_refresh_on_load_default_off_no_fetch(app_client):
 
 
 @respx.mock
+def test_refresh_on_load_survives_token_outage(app_client, monkeypatch):
+    """Regression: an opted-in on-load refresh must be best-effort — a transient
+    token-endpoint outage (get_access_token raising) leaves cached counts in
+    place and still renders the dashboard, never a 502 error page."""
+    from app.ynab import YNABError
+
+    mock_budgets()
+    _mock_txns("a1", [_txn("t1")])
+    token = login(app_client)
+    create_conversion(app_client, token, "a1", "Japan Trip")
+    app_client.post(
+        "/settings/refresh-on-load", data={"csrf_token": token, "enabled": "on"}
+    )
+
+    def _boom(*_a, **_k):
+        raise YNABError("token endpoint 502", status_code=502)
+
+    monkeypatch.setattr("app.routes.conversions.oauth.get_access_token", _boom)
+    r = app_client.get("/conversions")
+    assert r.status_code == 200
+
+
+@respx.mock
 def test_refresh_on_load_when_enabled_refreshes_stale(app_client):
     """Toggle ON: a never-checked conversion gets its count fetched on load."""
     mock_budgets()

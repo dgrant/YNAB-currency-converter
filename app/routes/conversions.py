@@ -133,26 +133,35 @@ def _maybe_onload_refresh(user: User, conversions: list[dict]) -> bool:
     if not stale:
         return False
     stale.sort(key=lambda c: c.get("pending_checked_at") or "")  # never-checked first
-    token = oauth.get_access_token(settings, conn_store, user.id)
-    if token is None:
-        return False
-    wrote = False
-    with httpx.Client(base_url=settings.ynab_api_base, timeout=6) as client:
-        ynab = YNABClient(token, settings.ynab_api_base, client=client)
-        for conversion in stale[:_ONLOAD_REFRESH_MAX]:
-            try:
-                txns = ynab.get_transactions(
-                    conversion["budget_id"],
-                    conversion["account_id"],
-                    conversion["start_date"],
+    # get_access_token can raise YNABError on a transient token-endpoint outage
+    # (oauth._token_request re-raises 5xx rather than deleting the grant). That
+    # must NOT turn a plain dashboard GET into a 502 for an opted-in user, so it
+    # is inside the best-effort guard along with the fetch loop.
+    try:
+        token = oauth.get_access_token(settings, conn_store, user.id)
+        if token is None:
+            return False
+        wrote = False
+        with httpx.Client(base_url=settings.ynab_api_base, timeout=6) as client:
+            ynab = YNABClient(token, settings.ynab_api_base, client=client)
+            for conversion in stale[:_ONLOAD_REFRESH_MAX]:
+                try:
+                    txns = ynab.get_transactions(
+                        conversion["budget_id"],
+                        conversion["account_id"],
+                        conversion["start_date"],
+                    )
+                except Exception:
+                    continue  # one slow/failed account must not block the rest
+                get_store().set_pending(
+                    user.id, conversion["id"], pending_count(txns), _utcnow_iso()
                 )
-            except Exception:
-                continue  # best-effort: a slow/failed refresh must not break the page
-            get_store().set_pending(
-                user.id, conversion["id"], pending_count(txns), _utcnow_iso()
-            )
-            wrote = True
-    return wrote
+                wrote = True
+        return wrote
+    except Exception:
+        # Any refresh failure (token outage, network) leaves cached counts in
+        # place and renders the page — the docstring's best-effort promise.
+        return False
 
 
 @router.get("/conversions")
@@ -192,7 +201,12 @@ def index(
             "single_plan": single_plan,
             "created": created,
             "total_pending": total_pending,
-            "any_checked": any(c["pending_checked_at"] for c in conversions),
+            # all_checked drives the "Nothing pending" disabled state: only
+            # trust total_pending==0 when every conversion has actually been
+            # checked, so a never-checked account with real work can't hide
+            # behind another account's 0.
+            "all_checked": all(c["pending_checked_at"] for c in conversions),
+            "refresh_on_load": user.refresh_on_load,
             "apply_summary": request.session.pop("apply_all_summary", None),
         },
     )
@@ -874,7 +888,12 @@ async def apply_all(
         except YNABError as exc:
             if exc.status_code in (401, 429):
                 raise
-            results.append({"account_name": conversion["account_name"], "error": str(exc)})
+            # Truncate: the summary is stored in the signed session cookie
+            # (~4KB); a long YNAB message across many accounts could overflow
+            # it and silently drop the whole flash.
+            results.append(
+                {"account_name": conversion["account_name"], "error": str(exc)[:120]}
+            )
             continue
         results.append(
             {

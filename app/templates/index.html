@@ -14,8 +14,8 @@
   <div class="head-actions">
     {% if conversions %}
     <button type="submit" form="preview-all-form" id="preview-all-btn" class="button primary"
-            {% if any_checked and total_pending == 0 %}disabled{% endif %}>
-      {% if any_checked and total_pending == 0 %}Nothing pending{% elif any_checked %}Preview all ({{ total_pending }} pending){% else %}Preview all{% endif %}
+            {% if all_checked and total_pending == 0 %}disabled{% endif %}>
+      {% if all_checked and total_pending == 0 %}Nothing pending{% elif all_checked %}Preview all ({{ total_pending }} pending){% else %}Preview all{% endif %}
     </button>
     {% endif %}
     <a class="button" href="/conversions/batch">Batch add</a>
