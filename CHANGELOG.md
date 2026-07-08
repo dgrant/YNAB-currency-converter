@@ -4,7 +4,7 @@ All notable changes to this project are documented here. Versions use gstack's
 four-part `MAJOR.MINOR.PATCH.MICRO` scheme; the canonical version lives in the
 root `VERSION` file. New entries go directly under this header, newest first.
 
-## [0.2.1.0] - 2026-07-08
+## [0.3.1.0] - 2026-07-08
 
 ### Changed
 - Dependency management moved from pip + `requirements.txt` to
@@ -14,6 +14,30 @@ root `VERSION` file. New entries go directly under this header, newest first.
   installs from the lockfile with `uv sync --frozen --no-dev`, CI uses
   `astral-sh/setup-uv` + `uv run`, and the dev docs describe the `uv sync` /
   `uv run` workflow. No runtime behavior changes.
+
+## [0.3.0.0] - 2026-07-08
+
+### Added
+- **Convert every account in two clicks.** The conversions page is now a
+  dashboard: a "Preview all" button fetches every configured account at once
+  and shows one combined page grouped by account, with a per-account subtotal
+  in that account's own currency. Untick anything you don't want, then approve
+  once — a single pass updates every account. Nothing is written to YNAB until
+  you approve, exactly as before.
+- **Pending-count badges.** Each account on the index shows how many
+  transactions are waiting to be converted, with a "checked N ago" note. The
+  count refreshes whenever you preview or apply, so the page tells you at a
+  glance which accounts need attention instead of making you open each one.
+- **Optional automatic refresh.** A new setting (off by default) refreshes the
+  most out-of-date pending counts when you open the page, so the dashboard can
+  feel live without you pressing anything. It's throttled and capped to stay
+  well within YNAB's rate limit, and a slow or failed refresh never blocks or
+  breaks the page.
+
+### Changed
+- The index links each account straight to its preview, and the "Preview all"
+  button reflects the total pending across every account — routine syncing no
+  longer means clicking through a detail page per account.
 
 ## [0.2.0.1] - 2026-07-07
 

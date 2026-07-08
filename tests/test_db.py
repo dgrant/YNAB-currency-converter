@@ -43,6 +43,51 @@ def test_init_migrates_pre_existing_db_without_last_synced(tmp_path):
     db.init(tmp_path)  # idempotent: re-running must not error on the existing column
 
 
+# Schema predating the pending-count badge columns AND the users
+# refresh_on_load column — a live production DB before the dashboard work.
+_SCHEMA_BEFORE_PENDING_COLUMNS = """
+CREATE TABLE users (
+    id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE conversions (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, budget_id TEXT NOT NULL,
+    budget_name TEXT NOT NULL, account_id TEXT NOT NULL, account_name TEXT NOT NULL,
+    from_currency TEXT NOT NULL, to_currency TEXT NOT NULL, start_date TEXT NOT NULL,
+    last_synced TEXT
+);
+INSERT INTO users (id, email, password_hash) VALUES ('u1', 'a@b.com', 'x');
+INSERT INTO conversions VALUES
+    ('c1', 'u1', 'b1', 'My Budget', 'a1', 'Japan Trip', 'JPY', 'USD', '2024-01-01', NULL);
+"""
+
+
+def test_init_migrates_pending_and_refresh_columns(tmp_path):
+    """The dashboard adds conversions.pending_count / pending_checked_at and
+    users.refresh_on_load. A fresh tmp DB never exercises the ALTER branch (it
+    ships the columns via CREATE TABLE), so pin it against a pre-migration DB."""
+    conn = sqlite3.connect(db.db_path(tmp_path))
+    conn.executescript(_SCHEMA_BEFORE_PENDING_COLUMNS)
+    conn.commit()
+    conn.close()
+
+    db.init(tmp_path)  # must ALTER all three columns in
+
+    conn = db.connect(tmp_path)
+    conv_cols = {row["name"] for row in conn.execute("PRAGMA table_info(conversions)")}
+    assert {"pending_count", "pending_checked_at"} <= conv_cols
+    user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+    assert "refresh_on_load" in user_cols
+    # existing rows survive; new columns default to NULL / 0
+    conv = conn.execute("SELECT * FROM conversions WHERE id = 'c1'").fetchone()
+    assert conv["pending_count"] is None and conv["pending_checked_at"] is None
+    user = conn.execute("SELECT * FROM users WHERE id = 'u1'").fetchone()
+    assert user["refresh_on_load"] == 0
+    conn.close()
+
+    db.init(tmp_path)  # idempotent
+
+
 # A stand-in for a live production DB (predating the unique constraint) that
 # already has two conversions for the same account — the exact state the
 # check-then-insert race could have produced. c1 is older (lower rowid).

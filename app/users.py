@@ -42,10 +42,19 @@ class User:
     id: str
     email: str
     password_hash: str
+    refresh_on_load: bool = False
 
 
 def _row_to_user(row) -> User:
-    return User(id=row["id"], email=row["email"], password_hash=row["password_hash"])
+    # refresh_on_load is stored 0/1; some code paths (tests, older rows) may
+    # not carry it, so default to off.
+    keys = row.keys() if hasattr(row, "keys") else []
+    return User(
+        id=row["id"],
+        email=row["email"],
+        password_hash=row["password_hash"],
+        refresh_on_load=bool(row["refresh_on_load"]) if "refresh_on_load" in keys else False,
+    )
 
 
 class UserStore:
@@ -85,3 +94,15 @@ class UserStore:
         finally:
             conn.close()
         return _row_to_user(row) if row else None
+
+    def set_refresh_on_load(self, user_id: str, enabled: bool) -> None:
+        """Toggle the per-user 'refresh pending counts on page load' opt-in."""
+        conn = db.connect(self.data_dir)
+        try:
+            conn.execute(
+                "UPDATE users SET refresh_on_load = ? WHERE id = ?",
+                (1 if enabled else 0, user_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()

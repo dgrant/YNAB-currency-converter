@@ -22,14 +22,21 @@ already converted by that service are recognized and never converted again.
    is guessed from the account name, and the currency to convert *into* comes
    straight from your plan in YNAB. Setting up several accounts? **Batch add**
    lists every account you haven't configured yet and creates them all at once.
-2. **Preview sync** — fetches the account's transactions from YNAB since the
+2. **Preview** — fetches the account's transactions from YNAB since the
    start date, skips any whose memo already carries an `(FX rate: …)` marker,
    and shows a table of proposed conversions (date-accurate rates from the
-   free [Frankfurter](https://frankfurter.dev) API, ECB data).
+   free [Frankfurter](https://frankfurter.dev) API, ECB data). **Preview all**
+   does this for every account at once and shows one combined page grouped by
+   account, so the daily loop across several accounts stays two clicks.
 3. **Approve** — untick anything you don't want, approve, and the selected
-   transactions are updated in YNAB via the official API in one bulk call.
-   Afterwards the conversion's start date moves forward past everything handled,
-   so future previews stay fast as the account's history grows.
+   transactions are updated in YNAB via the official API. Afterwards the
+   conversion's start date moves forward past everything handled, so future
+   previews stay fast as the account's history grows.
+
+The conversions page doubles as a dashboard: each account shows a pending
+count so you can see at a glance which ones have new transactions to convert.
+The count updates whenever you preview, and an optional setting (off by
+default) refreshes stale counts automatically when you open the page.
 
 Nothing is written to YNAB without your approval. The app stores no
 transaction data — just accounts (email + password), each user's YNAB

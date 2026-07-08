@@ -51,24 +51,6 @@ is the remaining feature work to actually convert them instead of skipping.
 **Effort:** L
 **Priority:** P1
 
-### Convert all accounts at once
-
-**What:** Add a "Preview all" on the index page that runs preview for
-every configured conversion and shows one combined, grouped table with a
-single approve.
-
-**Why:** Today preview/apply is per-conversion; this removes the need to
-click through each account separately.
-
-**Context:** Rate fetches stay per conversion (different currency pairs),
-but YNAB updates can share one bulk PATCH per budget
-(`update_transactions` already takes a list). Keep per-row unticking, and
-keep the preview→approve hidden-field contract. This is also most of the
-groundwork for the auto-sync scheduler below.
-
-**Effort:** M
-**Priority:** P1
-
 ### Daily auto-sync scheduler
 
 **What:** A background job (in-process `asyncio` task or a second
@@ -86,25 +68,6 @@ shouldn't be silently bypassed.
 **Effort:** L
 **Priority:** P2
 **Depends on:** Convert all accounts at once (shares the groundwork)
-
-### Show pending counts on the index page
-
-**What:** A "N unconverted" badge per row (fetched on demand or by the
-scheduler), turning the static conversions list into a dashboard.
-
-**Why:** So you can see at a glance which accounts have new transactions to
-convert and go deal with them. Today the index is just static config — it
-gives no signal about which accounts actually need attention, so you have
-to open each conversion and run a preview to find out.
-
-**Context:** Pairs naturally with the scheduler and `last_synced` work
-already shipped. Request volume is the thing to watch: a naive
-render-time count fetches transactions for every conversion on each page
-load (see "Cap or chunk large previews / applies" and the ~200/hr YNAB
-budget), so fetch on demand or off the scheduler rather than inline.
-
-**Effort:** M
-**Priority:** P1
 
 ### Notifications for pending conversions
 
@@ -291,35 +254,6 @@ safety issue.)*
 
 ## UX
 
-### Fewer clicks to convert an account
-
-**What:** Cut the per-account convert path down from three page loads.
-Today it's: click the account on the index → "Preview sync" on the detail
-page → approve on the preview page. At minimum, let the index (or the
-pending-count badge) link straight to the preview, skipping the detail
-page. Ideally offer a one-click "convert this account" that previews and,
-on a clean run, goes straight to approve.
-
-**Why:** Routine syncing is the common case and it's three clicks across
-three pages for a single account — and it multiplies: someone with several
-foreign-currency accounts repeats the whole detail → preview → approve
-dance once per account every sync. It feels tedious when you just want to
-clear the backlog across your accounts.
-
-**Context:** The detail page's only real action is the "Preview sync"
-button (`detail.html` → POST `/conversions/{id}/preview`); the index
-already links each row to the detail page, so pointing that link (or a new
-"Preview" action / the pending-count badge) at the preview POST removes a
-hop. Keep the preview→approve hidden-field contract intact — don't
-auto-apply without showing the proposed amounts/memos at least once, since
-that safety step is deliberate (see CLAUDE.md). Overlaps with "Convert all
-accounts at once" (a combined preview+approve from the index) and "Show
-pending counts" (a badge that deep-links to preview) — worth designing
-these together.
-
-**Effort:** M
-**Priority:** P2
-
 ### Default the start date earlier than today
 
 **What:** Prefill the new-conversion and batch-create forms with a start
@@ -500,6 +434,32 @@ only worth doing if usage actually grows past friends-and-family scale.
 ---
 
 ## Completed
+
+### Dashboard: preview all accounts, apply all, pending-count badges
+**(Features / UX)**
+
+Done (2026-07): the conversions index is now a dashboard. `POST
+/conversions/preview-all` fetches every conversion and renders one combined
+page grouped by account, each group with its own per-currency subtotal (no
+cross-currency sum); `POST /conversions/apply-all` applies them one
+conversion at a time under the existing per-conversion `_apply_lock`, so a
+per-group failure (or a 401/429, which re-routes/aborts) doesn't stop the
+rest. Cached `pending_count` / `pending_checked_at` columns (via
+`_MIGRATIONS`) drive per-row "N pending" badges with a staleness note,
+refreshed by any path that fetches a conversion's transactions. An opt-in,
+default-off per-user setting (`users.refresh_on_load`) refreshes the
+most-stale counts on page load, throttled + capped + best-effort. Index rows
+deep-link straight to preview (nested-form bug fixed via HTML5 `form=`
+association). This closes three backlog items at once — "Convert all accounts
+at once", "Show pending counts on the index page", and "Fewer clicks to
+convert an account". Tests: `tests/test_preview_all.py` (14 cases:
+grouping, empty guards, rate-outage isolation, 401/429 routing,
+partial-failure apply-all, cross-group tamper drop, badge-count == next
+preview, CSRF, on-load refresh throttle + token-outage best-effort) and the
+pre-migration column test in `tests/test_db.py`.
+
+**Completed:** v0.3.0.0 (2026-07-08)
+
 
 ### Batch-create conversions for multiple accounts at once
 **(Features)**
