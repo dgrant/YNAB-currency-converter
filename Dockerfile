@@ -1,9 +1,22 @@
 FROM python:3.12-slim
 
+# uv binary, copied from its official image (pinned for reproducible builds).
+COPY --from=ghcr.io/astral-sh/uv:0.8.17 /uv /usr/local/bin/uv
+
 WORKDIR /srv
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install runtime dependencies into /srv/.venv from the lockfile. Copying only
+# the dependency manifests first keeps this layer cached across app-code edits.
+# --no-dev skips the dev group; with no build backend, only deps are installed.
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/srv/.venv
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev
+
+# Put the venv on PATH so `uvicorn` (and `python3`) resolve to it.
+ENV PATH="/srv/.venv/bin:$PATH"
 
 COPY app ./app
 COPY VERSION ./VERSION

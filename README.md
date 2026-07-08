@@ -52,12 +52,12 @@ cp .env.example .env   # then edit: SECRET_KEY (and optionally the OAuth vars)
 docker compose up -d   # http://localhost:8000
 ```
 
-Or without Docker:
+Or without Docker (needs [uv](https://docs.astral.sh/uv/)):
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+uv sync --no-dev
 set -a; source .env; set +a
-.venv/bin/uvicorn app.main:app --port 8000
+uv run uvicorn app.main:app --port 8000
 ```
 
 See [DEPLOY.md](DEPLOY.md) for VPS deployment.
@@ -87,8 +87,8 @@ docker compose exec app python -m app.import_legacy you@example.com
 ## Development
 
 ```bash
-pip install -r requirements-dev.txt
-pytest
+uv sync   # installs runtime + dev dependencies
+uv run pytest
 ```
 
 ## Notes & limitations
