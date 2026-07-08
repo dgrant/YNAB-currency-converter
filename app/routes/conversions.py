@@ -201,10 +201,10 @@ def index(
             "single_plan": single_plan,
             "created": created,
             "total_pending": total_pending,
-            # all_checked drives the "Nothing pending" disabled state: only
-            # trust total_pending==0 when every conversion has actually been
-            # checked, so a never-checked account with real work can't hide
-            # behind another account's 0.
+            # all_checked drives the button's caught-up label ("Refresh" vs
+            # "Preview all (N pending)"): only trust total_pending==0 when every
+            # conversion has actually been checked, so a never-checked account
+            # with real work can't hide behind another account's 0.
             "all_checked": all(c["pending_checked_at"] for c in conversions),
             "refresh_on_load": user.refresh_on_load,
             "apply_summary": request.session.pop("apply_all_summary", None),
