@@ -4,6 +4,18 @@ All notable changes to this project are documented here. Versions use gstack's
 four-part `MAJOR.MINOR.PATCH.MICRO` scheme; the canonical version lives in the
 root `VERSION` file. New entries go directly under this header, newest first.
 
+## [0.3.1.2] - 2026-07-08
+
+### Fixed
+- **The dashboard's "Preview all" button is now a working "Refresh" when
+  everything is caught up.** Previously, once every account showed 0 pending
+  the button switched to a disabled "Nothing pending" — and since pending
+  counts only refresh by previewing, there was no way to re-check YNAB for
+  transactions added since the last check. The button also had no disabled
+  styling, so it stayed bright blue and looked clickable while doing nothing.
+  It now stays enabled and reads "Refresh", re-fetching every account and
+  rewriting the cached pending counts.
+
 ## [0.3.1.1] - 2026-07-08
 
 ### Fixed
