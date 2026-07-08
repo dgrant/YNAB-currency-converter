@@ -30,8 +30,16 @@ _FIELDS = (
 )
 
 
+# Store-managed (non-form) columns, set by mark_synced / set_pending, not by
+# add()/update(). Kept out of _FIELDS so a form write can't clobber them.
+_MANAGED = ("last_synced", "pending_count", "pending_checked_at")
+
+
 def _row_to_dict(row) -> dict:
-    return {**{key: row[key] for key in ("id", *_FIELDS)}, "last_synced": row["last_synced"]}
+    return {
+        **{key: row[key] for key in ("id", *_FIELDS)},
+        **{key: row[key] for key in _MANAGED},
+    }
 
 
 class ConversionStore:
@@ -146,6 +154,24 @@ class ConversionStore:
             conn.execute(
                 "UPDATE conversions SET last_synced = ? WHERE user_id = ? AND id = ?",
                 (when, user_id, conversion_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def set_pending(
+        self, user_id: str, conversion_id: str, count: int, checked_at: str
+    ) -> None:
+        """Cache the pending-transaction count for the index badges. Written
+        by any path that just fetched this conversion's transactions (preview,
+        apply, on-load refresh) — a focused write so it can't clobber a
+        concurrent edit of the config fields."""
+        conn = db.connect(self.data_dir)
+        try:
+            conn.execute(
+                "UPDATE conversions SET pending_count = ?, pending_checked_at = ? "
+                "WHERE user_id = ? AND id = ?",
+                (count, checked_at, user_id, conversion_id),
             )
             conn.commit()
         finally:

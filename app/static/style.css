@@ -10,6 +10,11 @@
   --flash-bg: #ecfdf5;
   --flash-border: #6ee7b7;
   --flash-fg: #065f46;
+  --danger-bg: #fef2f2;
+  --danger-border: #fca5a5;
+  --danger-fg: #991b1b;
+  --badge-bg: #eef2ff;
+  --badge-fg: #3730a3;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -25,6 +30,11 @@
     --flash-bg: #0c2b22;
     --flash-border: #14724f;
     --flash-fg: #6ee7b7;
+    --danger-bg: #2a1416;
+    --danger-border: #7f1d1d;
+    --danger-fg: #fca5a5;
+    --badge-bg: #1e293b;
+    --badge-fg: #a5b4fc;
   }
 }
 
@@ -209,6 +219,61 @@ tfoot td { background: var(--th-bg); font-weight: 600; border-top: 2px solid var
   padding: 0.75rem 1.25rem;
   margin-bottom: 1rem;
 }
+
+.flash.danger {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+  color: var(--danger-fg);
+}
+
+/* Pending-count badge: a small pill with three states. has-pending draws the
+   eye (there is work to do); zero and unknown recede. */
+.badge {
+  display: inline-block;
+  min-width: 1.5rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.badge.has-pending { background: var(--badge-bg); color: var(--badge-fg); }
+.badge.zero, .badge.unknown {
+  background: transparent;
+  color: var(--muted);
+  font-weight: 400;
+}
+.pending-cell { white-space: nowrap; }
+.pending-cell .stale { margin-left: 0.4rem; font-size: 0.78rem; }
+.row-actions { text-align: right; white-space: nowrap; }
+
+/* Toggle row on the settings page */
+label.toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+  margin: 0.5rem 0 0;
+}
+label.toggle input { width: auto; margin: 0; }
+
+/* Combined preview: one <section> per account, each with its own table +
+   subtotal. Grouping keeps the currencies from mixing (there is no global
+   cross-currency total). */
+.group { margin-bottom: 1.75rem; }
+.group h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  font-size: 1.05rem;
+  margin: 0 0 0.5rem;
+}
+.group h2 .muted { font-weight: 400; font-size: 0.9rem; }
+.group-failed .error { margin: 0.25rem 0 0.5rem; }
+form.inline { display: inline; margin: 0; }
+form.inline button { margin: 0; }
 
 /* landing page */
 .hero { text-align: center; padding: 2.5rem 0 1.5rem; }

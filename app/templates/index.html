@@ -12,6 +12,12 @@
 <div class="page-head">
   <h1>Conversions</h1>
   <div class="head-actions">
+    {% if conversions %}
+    <button type="submit" form="preview-all-form" id="preview-all-btn" class="button primary"
+            {% if any_checked and total_pending == 0 %}disabled{% endif %}>
+      {% if any_checked and total_pending == 0 %}Nothing pending{% elif any_checked %}Preview all ({{ total_pending }} pending){% else %}Preview all{% endif %}
+    </button>
+    {% endif %}
     <a class="button" href="/conversions/batch">Batch add</a>
     <a class="button primary" href="/conversions/new">New conversion</a>
   </div>
@@ -19,6 +25,18 @@
 {% if created is not none %}
 <div class="flash">
   {{ created }} conversion{{ "s" if created != 1 }} created.
+</div>
+{% endif %}
+{% if apply_summary %}
+<div class="flash{% if apply_summary | selectattr('error') | list %} danger{% endif %}">
+  {% for r in apply_summary %}
+    {%- if r.error -%}
+      <strong>{{ r.account_name }}: failed</strong> ({{ r.error }})
+    {%- else -%}
+      {{ r.account_name }}: {{ r.applied }} applied{% if r.dropped %}, {{ r.dropped }} skipped{% endif %}
+    {%- endif -%}
+    {{ "; " if not loop.last }}
+  {% endfor %}
 </div>
 {% endif %}
 {% if not has_ynab %}
@@ -29,43 +47,74 @@
 </div>
 {% endif %}
 {% if conversions %}
-<form method="post" action="/conversions/bulk-delete" id="bulk-form"
+<table>
+  <thead>
+    <tr>
+      <th class="check"><input type="checkbox" id="check-all" aria-label="Select all"></th>
+      {{ sort_th("account", "Account") }}
+      {% if not single_plan %}{{ sort_th("plan", "Plan") }}{% endif %}
+      {{ sort_th("currency", "Currencies") }}
+      {{ sort_th("pending", "Pending") }}
+      {{ sort_th("start", "Start date") }}
+      {{ sort_th("synced", "Last synced") }}
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in conversions %}
+    <tr>
+      <td class="check">
+        <input type="checkbox" name="ids" value="{{ c.id }}" form="bulk-form"
+               aria-label="Select {{ c.account_name }}">
+      </td>
+      <td><a href="/conversions/{{ c.id }}">{{ c.account_name }}</a></td>
+      {% if not single_plan %}<td class="muted">{{ c.budget_name }}</td>{% endif %}
+      <td class="muted">{{ c.from_currency }} → {{ c.to_currency }}</td>
+      <td class="pending-cell">
+        {% if c.pending_count is none %}
+        <span class="badge unknown" title="Not checked yet">—</span>
+        {% elif c.pending_count > 0 %}
+        <span class="badge has-pending">{{ c.pending_count }}</span>
+        {% else %}
+        <span class="badge zero">0</span>
+        {% endif %}
+        {% if c.pending_checked_ago %}<span class="stale muted">{{ c.pending_checked_ago }}</span>{% endif %}
+      </td>
+      <td class="muted">{{ c.start_date }}</td>
+      <td class="muted">{{ c.last_synced or "never" }}</td>
+      <td class="row-actions">
+        <button type="submit" form="pv-{{ c.id }}" class="link">Preview →</button>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<div class="bulk-actions">
+  <button type="submit" form="bulk-form" class="link danger" id="delete-selected" disabled>Delete selected</button>
+</div>
+
+{# Standalone forms, associated with the controls above via the HTML5 `form=`
+   attribute. Kept OUTSIDE the table so nothing nests a <form> inside another
+   (a per-row preview form inside a table-wrapping bulk-delete form is invalid
+   HTML). Each carries its own CSRF token. #}
+<form id="preview-all-form" method="post" action="/conversions/preview-all" hidden>
+  {{ csrf_input(request) }}
+</form>
+<form id="bulk-form" method="post" action="/conversions/bulk-delete" hidden
       onsubmit="return confirm('Delete the selected conversions? (YNAB data is not touched.)')">
   {{ csrf_input(request) }}
-  <table>
-    <thead>
-      <tr>
-        <th class="check"><input type="checkbox" id="check-all" aria-label="Select all"></th>
-        {{ sort_th("account", "Account") }}
-        {% if not single_plan %}{{ sort_th("plan", "Plan") }}{% endif %}
-        {{ sort_th("currency", "Currencies") }}
-        {{ sort_th("start", "Start date") }}
-        {{ sort_th("synced", "Last synced") }}
-      </tr>
-    </thead>
-    <tbody>
-      {% for c in conversions %}
-      <tr>
-        <td class="check">
-          <input type="checkbox" name="ids" value="{{ c.id }}"
-                 aria-label="Select {{ c.account_name }}">
-        </td>
-        <td><a href="/conversions/{{ c.id }}">{{ c.account_name }}</a></td>
-        {% if not single_plan %}<td>{{ c.budget_name }}</td>{% endif %}
-        <td>{{ c.from_currency }} → {{ c.to_currency }}</td>
-        <td>{{ c.start_date }}</td>
-        <td class="muted">{{ c.last_synced or "never" }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  <div class="bulk-actions">
-    <button type="submit" class="link danger" id="delete-selected" disabled>Delete selected</button>
-  </div>
 </form>
+{% for c in conversions %}
+<form id="pv-{{ c.id }}" method="post" action="/conversions/{{ c.id }}/preview" hidden>
+  {{ csrf_input(request) }}
+</form>
+{% endfor %}
+
 {% if single_plan %}
 <p class="hint">All conversions are in <strong>{{ conversions[0].budget_name }}</strong>.</p>
 {% endif %}
+<p class="hint">Pending counts refresh when you preview.
+   {% if not refresh_on_load %}Turn on automatic refresh in <a href="/settings">Settings</a>.{% endif %}</p>
 <script>
   const checkAll = document.getElementById("check-all");
   const rowChecks = [...document.querySelectorAll('input[name="ids"]')];
@@ -80,6 +129,17 @@
     refresh();
   });
   rowChecks.forEach(cb => cb.addEventListener("change", refresh));
+
+  // Loading state: previewing every account is N sequential YNAB fetches, so
+  // show progress instead of a dead wait after the click.
+  const previewAllForm = document.getElementById("preview-all-form");
+  const previewAllBtn = document.getElementById("preview-all-btn");
+  if (previewAllForm && previewAllBtn) {
+    previewAllForm.addEventListener("submit", () => {
+      previewAllBtn.disabled = true;
+      previewAllBtn.textContent = "Checking accounts…";
+    });
+  }
 </script>
 {% else %}
 <div class="card">

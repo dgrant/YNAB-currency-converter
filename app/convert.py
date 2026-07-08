@@ -55,6 +55,20 @@ def is_convertible(txn: dict) -> bool:
     return not is_excluded(txn) and not is_split(txn)
 
 
+def pending_count(transactions: list[dict], applied_ids: set[str] | None = None) -> int:
+    """The number the index badge shows: convertible transactions still needing
+    attention. `is_convertible` already excludes splits/zero/converted/skipped,
+    so this must NOT re-derive that set by hand. On the apply path, pass the
+    ids YNAB just confirmed so they're not counted as still-pending (they carry
+    a marker only after YNAB's response, not in the pre-PATCH fetch). Kept as
+    the single definition so a stored count can never diverge from what the
+    next preview would show."""
+    applied = applied_ids or set()
+    return sum(
+        1 for t in transactions if is_convertible(t) and t["id"] not in applied
+    )
+
+
 def decimal_digits(currency: str) -> int:
     return 0 if currency in ZERO_DECIMAL_CURRENCIES else 2
 

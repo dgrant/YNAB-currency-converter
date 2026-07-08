@@ -1,7 +1,8 @@
 import asyncio
 import re
-from datetime import date
+from datetime import date, datetime, timezone
 
+import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse
@@ -19,12 +20,20 @@ from ..convert import (
     is_excluded,
     is_skipped,
     is_split,
+    pending_count,
 )
-from ..rates import FrankfurterClient
+from ..rates import FrankfurterClient, RatesError
 from ..store import ConversionStore, DuplicateAccountError
 from ..templates import templates
 from ..users import User
-from ..ynab import YNABClient
+from ..ynab import YNABClient, YNABError
+
+# On-load pending-count refresh (opt-in, default off): only refresh a
+# conversion whose cached count is older than this, and only the few most-stale
+# per load — the guardrails behind revised premise 5 so a page view can't spend
+# the YNAB budget or exhaust the single worker's threadpool. See index().
+_ONLOAD_STALE_SECONDS = 3600
+_ONLOAD_REFRESH_MAX = 2
 
 router = APIRouter(dependencies=[Depends(require_login)])
 
@@ -62,14 +71,88 @@ def get_rates_client() -> FrankfurterClient:
 
 
 # Sort keys for the conversions list, mapped to a stable sort function. Missing
-# last_synced sorts as empty string (so never-synced rows group together).
+# last_synced sorts as empty string (so never-synced rows group together); a
+# missing pending_count sorts as 0 (never-checked groups with the caught-up).
 _SORT_KEYS = {
     "account": lambda c: (c["account_name"] or "").lower(),
     "plan": lambda c: (c["budget_name"] or "").lower(),
     "currency": lambda c: (c["from_currency"], c["to_currency"]),
     "start": lambda c: c["start_date"],
     "synced": lambda c: c["last_synced"] or "",
+    "pending": lambda c: c["pending_count"] or 0,
 }
+
+
+def _relative_time(iso: str | None, now: datetime) -> str | None:
+    """A short 'checked N ago' for the badge staleness note; None if unknown."""
+    if not iso:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    secs = (now - dt).total_seconds()
+    if secs < 60:
+        return "just now"
+    if secs < 3600:
+        return f"{int(secs // 60)}m ago"
+    if secs < 86400:
+        return f"{int(secs // 3600)}h ago"
+    return f"{int(secs // 86400)}d ago"
+
+
+def _is_stale(checked_at: str | None, now: datetime) -> bool:
+    if not checked_at:
+        return True
+    try:
+        dt = datetime.fromisoformat(checked_at)
+    except ValueError:
+        return True
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (now - dt).total_seconds() > _ONLOAD_STALE_SECONDS
+
+
+def _maybe_onload_refresh(user: User, conversions: list[dict]) -> bool:
+    """Opt-in (user.refresh_on_load), best-effort refresh of the most-stale
+    pending counts before the dashboard renders. Bounded three ways so a page
+    view can never spend the YNAB budget or pin the single worker's threadpool:
+    only stale conversions (older than _ONLOAD_STALE_SECONDS), only the
+    _ONLOAD_REFRESH_MAX most-stale, and on a short-timeout client with every
+    error swallowed. Returns True if it wrote anything (caller re-loads)."""
+    if not user.refresh_on_load:
+        return False
+    settings = get_settings()
+    conn_store = ConnectionStore(settings.data_dir)
+    if conn_store.get(user.id) is None:
+        return False
+    now = datetime.now(timezone.utc)
+    stale = [c for c in conversions if _is_stale(c.get("pending_checked_at"), now)]
+    if not stale:
+        return False
+    stale.sort(key=lambda c: c.get("pending_checked_at") or "")  # never-checked first
+    token = oauth.get_access_token(settings, conn_store, user.id)
+    if token is None:
+        return False
+    wrote = False
+    with httpx.Client(base_url=settings.ynab_api_base, timeout=6) as client:
+        ynab = YNABClient(token, settings.ynab_api_base, client=client)
+        for conversion in stale[:_ONLOAD_REFRESH_MAX]:
+            try:
+                txns = ynab.get_transactions(
+                    conversion["budget_id"],
+                    conversion["account_id"],
+                    conversion["start_date"],
+                )
+            except Exception:
+                continue  # best-effort: a slow/failed refresh must not break the page
+            get_store().set_pending(
+                user.id, conversion["id"], pending_count(txns), _utcnow_iso()
+            )
+            wrote = True
+    return wrote
 
 
 @router.get("/conversions")
@@ -83,10 +166,21 @@ def index(
     settings = get_settings()
     has_ynab = ConnectionStore(settings.data_dir).get(user.id) is not None
     conversions = get_store().load(user.id)
+    if _maybe_onload_refresh(user, conversions):
+        conversions = get_store().load(user.id)
     if sort in _SORT_KEYS:
         conversions.sort(key=_SORT_KEYS[sort], reverse=(order == "desc"))
+    else:
+        # Dashboard default: accounts with pending work float to the top. A
+        # stable sort on a constant key (all never-checked = 0) preserves
+        # insertion order, so this is a no-op until counts exist.
+        conversions.sort(key=lambda c: c["pending_count"] or 0, reverse=True)
     # The plan column is noise when every conversion lives in the same plan.
     single_plan = len({c["budget_name"] for c in conversions}) <= 1
+    now = datetime.now(timezone.utc)
+    for c in conversions:
+        c["pending_checked_ago"] = _relative_time(c.get("pending_checked_at"), now)
+    total_pending = sum(c["pending_count"] or 0 for c in conversions)
     return templates.TemplateResponse(
         request,
         "index.html",
@@ -97,6 +191,9 @@ def index(
             "order": "desc" if order == "desc" else "asc",
             "single_plan": single_plan,
             "created": created,
+            "total_pending": total_pending,
+            "any_checked": any(c["pending_checked_at"] for c in conversions),
+            "apply_summary": request.session.pop("apply_all_summary", None),
         },
     )
 
@@ -461,14 +558,16 @@ def delete(conversion_id: str, user: User = Depends(require_login)):
     return RedirectResponse("/conversions", status_code=303)
 
 
-@router.post("/conversions/{conversion_id}/preview")
-def preview(
-    request: Request,
-    conversion_id: str,
-    user: User = Depends(require_login),
-    ynab: YNABClient = Depends(require_ynab),
-):
-    conversion = _get_conversion_or_404(user.id, conversion_id)
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _build_group(ynab: YNABClient, conversion: dict) -> dict:
+    """Fetch one conversion's transactions and compute its preview rows +
+    pending count. Raises YNABError/RatesError on upstream failure — callers
+    decide whether that aborts (single preview) or fails just this group
+    (preview-all). No store writes here: the caller marks synced / sets the
+    badge only after this returns, so a failure never leaves a false 'synced'."""
     transactions = ynab.get_transactions(
         conversion["budget_id"], conversion["account_id"], conversion["start_date"]
     )
@@ -504,24 +603,219 @@ def preview(
                 sum(r["new_milliunits"] for r in rows), conversion["to_currency"]
             ),
         }
-    # Only mark synced once the preview actually succeeded — marking it right
-    # after the transactions fetch would claim "synced" even if the rates
-    # call below fails and the page never renders.
+    return {
+        "conversion": conversion,
+        "rows": rows,
+        "totals": totals,
+        "skipped_splits": skipped_splits,
+        "skipped_marked": skipped_marked,
+        "total_fetched": len(transactions),
+        # is_convertible == not-excluded and not-split, so this equals len(pending);
+        # go through pending_count() to keep one definition for the badge.
+        "pending_count": pending_count(transactions),
+        "from_digits": decimal_digits(conversion["from_currency"]),
+        "to_digits": decimal_digits(conversion["to_currency"]),
+        "error": None,
+    }
+
+
+def _parse_updates(form: FormData, txn_ids: list[str]) -> tuple[list[dict], dict]:
+    """Turn the preview form's per-row hidden fields into YNAB update dicts +
+    the metadata (action, pre-preview amount) the write-time re-checks need.
+    Raises KeyError/ValueError on a malformed/tampered form (caught by callers
+    as a 400 / per-group error). Shared by single apply and apply-all."""
+    updates: list[dict] = []
+    meta: dict[str, dict] = {}
+    for txn_id in txn_ids:
+        # Required: a missing action must not silently default to convert
+        # (the one action that rewrites the amount) — KeyError -> 400.
+        action = str(form[f"action_{txn_id}"])
+        original = int(str(form[f"original_{txn_id}"]))
+        if action == "convert":
+            updates.append(
+                {
+                    "id": txn_id,
+                    "amount": int(str(form[f"amount_{txn_id}"])),
+                    "memo": _memo_from_form(form[f"memo_{txn_id}"]),
+                }
+            )
+        elif action == "already":
+            updates.append(
+                {"id": txn_id, "memo": _memo_from_form(form[f"already_memo_{txn_id}"])}
+            )
+        elif action == "skip":
+            updates.append(
+                {"id": txn_id, "memo": _memo_from_form(form[f"skip_memo_{txn_id}"])}
+            )
+        else:
+            raise ValueError(f"unknown action {action!r}")
+        meta[txn_id] = {"action": action, "original": original}
+    return updates, meta
+
+
+async def _apply_updates(
+    user_id: str, ynab: YNABClient, conversion: dict, updates: list[dict], meta: dict
+) -> dict:
+    """Locked fetch -> re-check -> PATCH for ONE conversion, then advance its
+    last_synced / badge / start_date. The re-checks (present/split/stale/edited)
+    run against THIS conversion's own re-fetched account — never a shared
+    present_ids union, so a txn posted under the wrong group can't validate.
+    Returns {applied, skipped_splits, dropped}. Raises YNABError on a failed
+    fetch/PATCH — the caller decides (single apply re-raises to the handler;
+    apply-all treats non-401/429 as a per-group failure)."""
+    conversion_id = conversion["id"]
+    updated: list[dict] = []
+    skipped_splits = 0
+    if not updates:
+        return {"applied": [], "skipped_splits": 0, "dropped": 0}
+    async with _apply_lock(conversion_id):
+        # Re-read start_date under the lock; a concurrent apply may have just
+        # advanced it, and comparing against a pre-lock snapshot could regress
+        # the floor. Falls back to the passed snapshot if the row vanished.
+        current_conversion = (
+            await run_in_threadpool(get_store().get, user_id, conversion_id) or conversion
+        )
+        current = await run_in_threadpool(
+            ynab.get_transactions,
+            conversion["budget_id"],
+            conversion["account_id"],
+            current_conversion["start_date"],
+        )
+        current_by_id = {t["id"]: t for t in current}
+        present_ids = set(current_by_id)
+        split_ids = {tid for tid, t in current_by_id.items() if is_split(t)}
+        stale_ids = {tid for tid, t in current_by_id.items() if is_excluded(t)}
+        edited_ids = {
+            tid
+            for tid, m in meta.items()
+            if tid in current_by_id
+            and m["action"] in ("convert", "already")
+            and current_by_id[tid]["amount"] != m["original"]
+        }
+        safe = [
+            u
+            for u in updates
+            if u["id"] in present_ids
+            and u["id"] not in split_ids
+            and u["id"] not in stale_ids
+            and u["id"] not in edited_ids
+        ]
+        skipped_splits = sum(1 for u in updates if u["id"] in split_ids)
+        if safe:
+            updated = await run_in_threadpool(
+                ynab.update_transactions, conversion["budget_id"], safe
+            )
+        # last_synced + badge only after the fetch (and PATCH, if any) succeeded.
+        now_date = date.today().isoformat()
+        await run_in_threadpool(get_store().mark_synced, user_id, conversion_id, now_date)
+        applied_ids = {t["id"] for t in updated}
+        await run_in_threadpool(
+            get_store().set_pending,
+            user_id,
+            conversion_id,
+            pending_count(current, applied_ids),
+            _utcnow_iso(),
+        )
+        if safe:
+            # Advance the fetch floor from YNAB's CONFIRMED response (`updated`),
+            # never the request — so a partial confirm can't skip a txn that
+            # was never actually written.
+            pending_dates = [
+                t["date"]
+                for t in current
+                if not is_excluded(t) and t["id"] not in applied_ids
+            ]
+            new_start = min(pending_dates) if pending_dates else date.today().isoformat()
+            if new_start > current_conversion["start_date"]:
+                await run_in_threadpool(
+                    get_store().set_start_date, user_id, conversion_id, new_start
+                )
+    dropped = len(updates) - len(updated)
+    return {"applied": updated, "skipped_splits": skipped_splits, "dropped": dropped}
+
+
+@router.post("/conversions/{conversion_id}/preview")
+def preview(
+    request: Request,
+    conversion_id: str,
+    user: User = Depends(require_login),
+    ynab: YNABClient = Depends(require_ynab),
+):
+    conversion = _get_conversion_or_404(user.id, conversion_id)
+    group = _build_group(ynab, conversion)
+    # Only mark synced / refresh the badge once the preview actually succeeded
+    # — _build_group raises before returning if the fetch or rates call failed,
+    # so we never claim "synced" for a cycle that didn't complete.
     get_store().mark_synced(user.id, conversion_id, date.today().isoformat())
+    get_store().set_pending(user.id, conversion_id, group["pending_count"], _utcnow_iso())
     return templates.TemplateResponse(
         request,
         "preview.html",
         {
             "conversion": conversion,
-            "rows": rows,
-            "totals": totals,
-            "skipped_splits": skipped_splits,
-            "skipped_marked": skipped_marked,
-            "total_fetched": len(transactions),
-            "from_digits": decimal_digits(conversion["from_currency"]),
-            "to_digits": decimal_digits(conversion["to_currency"]),
+            "rows": group["rows"],
+            "totals": group["totals"],
+            "skipped_splits": group["skipped_splits"],
+            "skipped_marked": group["skipped_marked"],
+            "total_fetched": group["total_fetched"],
+            "from_digits": group["from_digits"],
+            "to_digits": group["to_digits"],
         },
     )
+
+
+@router.post("/conversions/preview-all")
+def preview_all(
+    request: Request,
+    user: User = Depends(require_login),
+    ynab: YNABClient = Depends(require_ynab),
+):
+    """Preview every configured conversion in one grouped page. Per-group
+    upstream failures (a rate outage, a non-auth YNAB error) render as a failed
+    group and don't blank the rest; a 401 (revoked token) or 429 (budget
+    exhausted) re-raises to the global handler — 401 reconnects, 429 stops the
+    loop instead of firing N more requests into a rate-limited API."""
+    conversions = get_store().load(user.id)
+    if not conversions:
+        return RedirectResponse("/conversions", status_code=303)
+    groups = []
+    now_date = date.today().isoformat()
+    checked_at = _utcnow_iso()
+    for conversion in conversions:
+        try:
+            group = _build_group(ynab, conversion)
+        except YNABError as exc:
+            if exc.status_code in (401, 429):
+                raise
+            groups.append(_failed_group(conversion, str(exc)))
+            continue
+        except RatesError as exc:
+            groups.append(_failed_group(conversion, str(exc)))
+            continue
+        get_store().mark_synced(user.id, conversion["id"], now_date)
+        get_store().set_pending(user.id, conversion["id"], group["pending_count"], checked_at)
+        groups.append(group)
+    total_pending = sum(g["pending_count"] for g in groups if g["error"] is None)
+    return templates.TemplateResponse(
+        request,
+        "preview_all.html",
+        {"groups": groups, "total_pending": total_pending},
+    )
+
+
+def _failed_group(conversion: dict, error: str) -> dict:
+    return {
+        "conversion": conversion,
+        "rows": [],
+        "totals": None,
+        "skipped_splits": 0,
+        "skipped_marked": [],
+        "total_fetched": 0,
+        "pending_count": 0,
+        "from_digits": decimal_digits(conversion["from_currency"]),
+        "to_digits": decimal_digits(conversion["to_currency"]),
+        "error": error,
+    }
 
 
 @router.post("/conversions/{conversion_id}/apply")
@@ -534,134 +828,64 @@ async def apply(
     conversion = _get_conversion_or_404(user.id, conversion_id)
     form = await request.form()
     try:
-        updates = []
-        # Per-txn metadata kept out of the PATCH body: the action and the
-        # amount the preview was computed against, for write-time re-checks.
-        meta: dict[str, dict] = {}
-        for raw_txn_id in form.getlist("selected"):
-            txn_id = str(raw_txn_id)
-            # Required: a missing action must not silently default to convert
-            # (the one action that rewrites the amount) — KeyError -> 400.
-            action = str(form[f"action_{txn_id}"])
-            original = int(str(form[f"original_{txn_id}"]))
-            if action == "convert":
-                updates.append(
-                    {
-                        "id": txn_id,
-                        "amount": int(str(form[f"amount_{txn_id}"])),
-                        "memo": _memo_from_form(form[f"memo_{txn_id}"]),
-                    }
-                )
-            elif action == "already":
-                # Amount is already in the budget currency — patch the memo only.
-                updates.append(
-                    {"id": txn_id, "memo": _memo_from_form(form[f"already_memo_{txn_id}"])}
-                )
-            elif action == "skip":
-                updates.append(
-                    {"id": txn_id, "memo": _memo_from_form(form[f"skip_memo_{txn_id}"])}
-                )
-            else:
-                raise ValueError(f"unknown action {action!r}")
-            meta[txn_id] = {"action": action, "original": original}
+        updates, meta = _parse_updates(form, [str(t) for t in form.getlist("selected")])
     except (KeyError, ValueError) as exc:
         raise HTTPException(
             400, "Malformed apply form — go back and run the preview again"
         ) from exc
-    updated, skipped_splits = [], 0
-    if updates:
-        # Serialize the fetch→filter→PATCH per conversion so two concurrent
-        # approves (double-click, two tabs) can't both pass the re-checks
-        # below against the same pre-PATCH state and race. (`ynab` is the
-        # per-user client injected as a dependency.)
-        # The YNAB client is synchronous; run its calls in the threadpool so a
-        # slow round-trip doesn't stall the event loop (and with it every
-        # other user's request). This also makes the lock do real work: with
-        # the I/O yielding, two concurrent applies genuinely interleave.
-        async with _apply_lock(conversion_id):
-            # Re-read start_date fresh now that the per-conversion lock is
-            # held — a concurrent apply on this same conversion (double
-            # submit, two tabs) may have just advanced it, and comparing
-            # against the pre-lock snapshot below could regress the stored
-            # floor backward. Falls back to the pre-lock snapshot in the
-            # (vanishingly unlikely) case the row was deleted concurrently.
-            current_conversion = (
-                await run_in_threadpool(get_store().get, user.id, conversion_id)
-                or conversion
-            )
-            current = await run_in_threadpool(
-                ynab.get_transactions,
-                conversion["budget_id"],
-                conversion["account_id"],
-                current_conversion["start_date"],
-            )
-            current_by_id = {t["id"]: t for t in current}
-            present_ids = set(current_by_id)
-            split_ids = {tid for tid, t in current_by_id.items() if is_split(t)}
-            # Drop anything that got converted or skipped since the preview
-            # (stale form, second tab, back-button resubmit) — its marker means
-            # that decision already happened, and overwriting would clobber it.
-            stale_ids = {tid for tid, t in current_by_id.items() if is_excluded(t)}
-            # Drop rows whose amount was edited in YNAB since the preview: the
-            # convert amount / "already" equivalence was computed against the
-            # old amount, so writing it now would record a wrong value and the
-            # marker would hide the mismatch from every future preview. (skip
-            # is amount-independent — a bare "(skipped)" note stays valid.)
-            edited_ids = {
-                tid
-                for tid, m in meta.items()
-                if tid in current_by_id
-                and m["action"] in ("convert", "already")
-                and current_by_id[tid]["amount"] != m["original"]
-            }
-            # A txn deleted in YNAB between preview and approval would otherwise
-            # make the whole bulk PATCH fail, applying nothing.
-            safe = [
-                u
-                for u in updates
-                if u["id"] in present_ids
-                and u["id"] not in split_ids
-                and u["id"] not in stale_ids
-                and u["id"] not in edited_ids
-            ]
-            skipped_splits = sum(1 for u in updates if u["id"] in split_ids)
-            if safe:
-                updated = await run_in_threadpool(
-                    ynab.update_transactions, conversion["budget_id"], safe
-                )
-            # Only mark synced once the fetch (and PATCH, if there was one to
-            # send) actually succeeded — marking it before update_transactions
-            # would claim "synced" even if that PATCH then failed.
-            await run_in_threadpool(
-                get_store().mark_synced, user.id, conversion_id, date.today().isoformat()
-            )
-            # Advance the fetch floor past everything now handled, so future
-            # previews don't refetch-and-reskip converted history as it grows.
-            # Only ever move it up to the oldest transaction still needing
-            # attention — anything not excluded (converted/skipped/zero) and not
-            # just PATCHed here: splits we can't convert yet, rows the user left
-            # unticked, rows dropped by the stale/edited re-checks. Never past
-            # them, so nothing pending is skipped. If all caught up, advance to
-            # today (the "rely on last_synced" floor). Same start_date model the
-            # app already relies on: transactions dated before it aren't fetched.
-            if safe:
-                # Derived from `updated` (YNAB's confirmed response), not
-                # `safe` (what was submitted) — if YNAB's bulk PATCH ever
-                # confirmed fewer transactions than requested, trusting the
-                # request instead of the response could advance the floor
-                # past a transaction that was never actually converted.
-                applied_ids = {t["id"] for t in updated}
-                pending_dates = [
-                    t["date"]
-                    for t in current
-                    if not is_excluded(t) and t["id"] not in applied_ids
-                ]
-                new_start = min(pending_dates) if pending_dates else date.today().isoformat()
-                if new_start > current_conversion["start_date"]:
-                    await run_in_threadpool(
-                        get_store().set_start_date, user.id, conversion_id, new_start
-                    )
+    # A YNABError here (401/429/other) propagates to the global handler — same
+    # routing single-preview has always had (401 -> reconnect, 429 -> its page).
+    result = await _apply_updates(user.id, ynab, conversion, updates, meta)
+    skipped_splits = result["skipped_splits"]
     suffix = f"&skipped_splits={skipped_splits}" if skipped_splits else ""
     return RedirectResponse(
-        f"/conversions/{conversion_id}?applied={len(updated)}{suffix}", status_code=303
+        f"/conversions/{conversion_id}?applied={len(result['applied'])}{suffix}",
+        status_code=303,
     )
+
+
+@router.post("/conversions/apply-all")
+async def apply_all(
+    request: Request,
+    user: User = Depends(require_login),
+    ynab: YNABClient = Depends(require_ynab),
+):
+    """Approve the combined preview: one conversion at a time, each inside its
+    own lock. A per-group failure (bad form, non-auth YNAB error) is reported
+    and the rest still run; a 401/429 re-raises (reconnect / stop hammering a
+    rate-limited API). Each group's selected txns come from its own
+    `selected_<conversion_id>` list, and its `conversion_id` is validated
+    against the user's own conversions — never trusted blindly."""
+    form = await request.form()
+    conversion_ids = [str(c) for c in form.getlist("conversion_ids")]
+    results = []
+    for cid in conversion_ids:
+        conversion = get_store().get(user.id, cid)
+        if conversion is None:
+            continue  # not owned by this user, or deleted since the preview
+        selected = [str(t) for t in form.getlist(f"selected_{cid}")]
+        try:
+            updates, meta = _parse_updates(form, selected)
+        except (KeyError, ValueError):
+            results.append({"account_name": conversion["account_name"], "error": "malformed form"})
+            continue
+        try:
+            result = await _apply_updates(user.id, ynab, conversion, updates, meta)
+        except YNABError as exc:
+            if exc.status_code in (401, 429):
+                raise
+            results.append({"account_name": conversion["account_name"], "error": str(exc)})
+            continue
+        results.append(
+            {
+                "account_name": conversion["account_name"],
+                "applied": len(result["applied"]),
+                "dropped": result["dropped"],
+                "skipped_splits": result["skipped_splits"],
+                "error": None,
+            }
+        )
+    # Per-conversion summary can't fit a query param (see index()); stash it in
+    # the session for the next render, then redirect to the dashboard.
+    request.session["apply_all_summary"] = results
+    return RedirectResponse("/conversions", status_code=303)
