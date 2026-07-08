@@ -30,8 +30,11 @@ app/
   rates.py           # FrankfurterClient + RateTable (business-day fallback)
   convert.py         # core: filter unconverted, compute amounts/memos
   import_legacy.py   # one-shot v1 migration: python -m app.import_legacy <email>
-  routes/conversions.py  # list / new / edit / delete / bulk-delete / detail / preview / apply
-                         #   (all scoped by user)
+  routes/conversions.py  # list / new / edit / delete / bulk-delete / detail
+                         #   preview / apply (single) + preview-all / apply-all
+                         #   (grouped dashboard flow); all scoped by user
+                         #   (_build_group / _parse_updates / _apply_updates
+                         #    are shared by the single and all-accounts paths)
   routes/settings.py     # /settings: OAuth start/callback, disconnect
   templates/ static/
 tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.py is the full HTTP flow
@@ -98,6 +101,20 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
   revoked access token) instead 303s to `/settings?error=revoked` — no error
   page, since the fix is to reconnect, not retry. Idempotent GETs go through
   `app/http.py: get_with_retry`; the PATCH is never retried.
+- **Pending-count badges** — `conversions.pending_count` /
+  `pending_checked_at` (cached, shown on the index) must be refreshed by
+  *any* route that successfully fetches a conversion's transactions (single
+  preview, `preview-all`, and `apply`/`apply-all` — the locked re-fetch makes
+  it near-free). The stored count is `convert.pending_count()` over the
+  fetched list (minus the just-applied ids on the apply path); it goes
+  through the single `is_convertible` definition so the badge can never
+  diverge from what the next preview would show — never hand-roll a
+  split/excluded subtraction. `preview-all`/`apply-all` process conversions
+  one at a time: catch `RatesError` + non-401/429 `YNABError` as a per-group
+  failure, but **re-raise** 401 (reconnect) and 429 (stop, don't keep firing
+  at a rate-limited API). The opt-in on-load refresh (`users.refresh_on_load`,
+  default off) is best-effort — throttled, capped, and every failure swallowed
+  so a slow/dead YNAB never turns a dashboard GET into a 502.
 - **`last_synced`** (`store.mark_synced`) must be written only after the
   operation it certifies has actually succeeded — after `build_preview` in
   `preview()`, after `update_transactions` (or the "nothing to send" branch)
