@@ -4,6 +4,17 @@ All notable changes to this project are documented here. Versions use gstack's
 four-part `MAJOR.MINOR.PATCH.MICRO` scheme; the canonical version lives in the
 root `VERSION` file. New entries go directly under this header, newest first.
 
+## [0.2.1.0] - 2026-07-08
+
+### Changed
+- Dependency management moved from pip + `requirements.txt` to
+  [uv](https://docs.astral.sh/uv/). Runtime deps now live in
+  `pyproject.toml`'s `[project.dependencies]`, dev tools in a `dev` dependency
+  group, and exact versions are pinned in a committed `uv.lock`. The Dockerfile
+  installs from the lockfile with `uv sync --frozen --no-dev`, CI uses
+  `astral-sh/setup-uv` + `uv run`, and the dev docs describe the `uv sync` /
+  `uv run` workflow. No runtime behavior changes.
+
 ## [0.2.0.1] - 2026-07-07
 
 ### Fixed
