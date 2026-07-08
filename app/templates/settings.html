@@ -36,4 +36,21 @@
     {% endif %}
   {% endif %}
 </div>
+
+<div class="card">
+  <h2>Pending counts</h2>
+  <p class="hint">The conversions page shows how many transactions each account
+     has waiting. By default those counts refresh when you preview. Turn this on
+     to also refresh the most out-of-date counts automatically when you open the
+     page (a small number of extra YNAB requests, kept well within the limit).</p>
+  <form method="post" action="/settings/refresh-on-load">
+    {{ csrf_input(request) }}
+    <label class="toggle">
+      <input type="checkbox" name="enabled" value="on"
+             onchange="this.form.submit()"{% if user.refresh_on_load %} checked{% endif %}>
+      Keep pending counts up to date automatically
+    </label>
+    <noscript><button type="submit" class="link">Save</button></noscript>
+  </form>
+</div>
 {% endblock %}

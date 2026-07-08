@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS users (
     id            TEXT PRIMARY KEY,
     email         TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    refresh_on_load INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS ynab_connections (
@@ -34,7 +35,9 @@ CREATE TABLE IF NOT EXISTS conversions (
     from_currency TEXT NOT NULL,
     to_currency   TEXT NOT NULL,
     start_date    TEXT NOT NULL,
-    last_synced   TEXT
+    last_synced   TEXT,
+    pending_count      INTEGER,
+    pending_checked_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_conversions_user ON conversions(user_id);
@@ -45,6 +48,15 @@ CREATE INDEX IF NOT EXISTS idx_conversions_user ON conversions(user_id);
 # ALTERs. Each entry is (table, column, definition).
 _MIGRATIONS = (
     ("conversions", "last_synced", "TEXT"),
+    # Cached pending-transaction count + when it was last computed, so the
+    # index can show per-account "N pending" badges without a YNAB fetch on
+    # page load. Written by preview/apply and the opt-in on-load refresh; see
+    # store.set_pending and routes/conversions.py.
+    ("conversions", "pending_count", "INTEGER"),
+    ("conversions", "pending_checked_at", "TEXT"),
+    # Per-user opt-in: refresh stale pending counts on GET /conversions.
+    # Default 0 (off) — behavior is unchanged until a user turns it on.
+    ("users", "refresh_on_load", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 

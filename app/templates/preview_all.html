@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}Preview all — Currency Converter for YNAB{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Preview all accounts</h1>
+  <a href="/conversions">← Back</a>
+</div>
+
+{% set active = groups | selectattr("rows") | list %}
+{% set failed = groups | selectattr("error") | list %}
+
+{% if failed %}
+<div class="flash danger">
+  {{ failed | length }} account{{ "s" if failed | length != 1 }} could not be checked
+  and {{ "were" if failed | length != 1 else "was" }} left untouched — see below.
+</div>
+{% endif %}
+
+{% if active %}
+<p>{{ active | map(attribute="rows") | map("length") | sum }} unconverted transaction{{ "s" if active | map(attribute="rows") | map("length") | sum != 1 }}
+   across {{ active | length }} account{{ "s" if active | length != 1 }}.
+   Untick anything you don't want converted, then approve once.</p>
+<p class="hint">Nothing is written to YNAB until you approve.</p>
+
+<form method="post" action="/conversions/apply-all" id="apply-all-form">
+  {{ csrf_input(request) }}
+  {% for group in groups if group.rows %}
+  {% set c = group.conversion %}
+  <input type="hidden" name="conversion_ids" value="{{ c.id }}">
+  <section class="group">
+    <h2>{{ c.account_name }}
+      <span class="muted">{{ c.from_currency }} → {{ c.to_currency }}</span>
+      <span class="badge has-pending">{{ group.pending_count }} pending</span>
+    </h2>
+    {% if group.skipped_splits %}
+    <p class="hint">{{ group.skipped_splits }} split transaction{{ "s" if group.skipped_splits != 1 }} skipped —
+       convert them manually in YNAB.</p>
+    {% endif %}
+    <table class="group-table"
+           data-from="{{ c.from_currency }}" data-to="{{ c.to_currency }}"
+           data-from-digits="{{ group.from_digits }}" data-to-digits="{{ group.to_digits }}">
+      <thead>
+        <tr>
+          <th><input type="checkbox" class="group-check" checked
+                     aria-label="Select all for {{ c.account_name }}"></th>
+          <th>Date</th>
+          <th>Payee</th>
+          <th>Action</th>
+          <th class="memo">Memo</th>
+          <th class="num">Original ({{ c.from_currency }})</th>
+          <th class="num">Rate</th>
+          <th class="num">Converted ({{ c.to_currency }})</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in group.rows %}
+        <tr data-original="{{ row.original_milliunits }}" data-converted="{{ row.new_milliunits }}">
+          <td>
+            <input type="checkbox" class="row-check" name="selected_{{ c.id }}" value="{{ row.id }}" checked>
+            <input type="hidden" name="amount_{{ row.id }}" value="{{ row.new_milliunits }}">
+            <input type="hidden" name="original_{{ row.id }}" value="{{ row.original_milliunits }}">
+            <input type="hidden" name="memo_{{ row.id }}" value="{{ row.new_memo }}">
+            <input type="hidden" name="already_memo_{{ row.id }}" value="{{ row.already_memo }}">
+            <input type="hidden" name="skip_memo_{{ row.id }}" value="{{ row.skip_memo }}">
+          </td>
+          <td>{{ row.date }}</td>
+          <td>{{ row.payee_name }}</td>
+          <td class="action">
+            <select name="action_{{ row.id }}"
+                    aria-label="Action for {{ row.payee_name or 'transaction' }} on {{ row.date }}">
+              <option value="convert">Convert</option>
+              <option value="already">Already {{ c.to_currency }} (memo ≈{{ row.equivalent_display }})</option>
+              <option value="skip">Already {{ c.to_currency }} (skip forever)</option>
+            </select>
+          </td>
+          <td class="memo">{{ row.old_memo }}</td>
+          <td class="num">{{ row.original_display }}</td>
+          <td class="num fx">{{ row.rate_display }}</td>
+          <td class="num fx">{{ row.new_display }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="4" class="group-total-label">Total</td>
+          <td class="memo"></td>
+          <td class="num group-total-original"></td>
+          <td></td>
+          <td class="num group-total-converted"></td>
+        </tr>
+      </tfoot>
+    </table>
+  </section>
+  {% endfor %}
+  <button type="submit" class="primary" id="approve-all">Approve &amp; update YNAB</button>
+</form>
+{% endif %}
+
+{% for group in groups if group.error %}
+{% set c = group.conversion %}
+<section class="group group-failed">
+  <h2>{{ c.account_name }} <span class="muted">{{ c.from_currency }} → {{ c.to_currency }}</span></h2>
+  <p class="error">Could not check this account: {{ group.error }}</p>
+  <form method="post" action="/conversions/{{ c.id }}/preview" class="inline">
+    {{ csrf_input(request) }}
+    <button type="submit" class="link">Retry {{ c.account_name }} →</button>
+  </form>
+</section>
+{% endfor %}
+
+{% for group in groups if not group.rows and not group.error %}
+{% set c = group.conversion %}
+<section class="group group-clear">
+  <h2>{{ c.account_name }} <span class="muted">{{ c.from_currency }} → {{ c.to_currency }}</span>
+    <span class="badge zero">caught up</span></h2>
+  <p class="hint">Nothing pending — checked{% if group.skipped_splits %},
+     {{ group.skipped_splits }} split{{ "s" if group.skipped_splits != 1 }} skipped{% endif %}.</p>
+</section>
+{% endfor %}
+
+{% if not active and not failed %}
+<div class="card"><p>Nothing pending across any account — you're all caught up.</p></div>
+{% endif %}
+
+<script>
+  // Per-group totals: sum only the rows that will actually convert (ticked +
+  // action "Convert") IN THAT GROUP, in that group's own currency. Cross-group
+  // currencies never mix, so there is no single global total.
+  function updateGroup(table) {
+    const fromDigits = Number(table.dataset.fromDigits);
+    const toDigits = Number(table.dataset.toDigits);
+    const fmtFrom = new Intl.NumberFormat("en-US",
+      {minimumFractionDigits: fromDigits, maximumFractionDigits: fromDigits});
+    const fmtTo = new Intl.NumberFormat("en-US",
+      {minimumFractionDigits: toDigits, maximumFractionDigits: toDigits});
+    let original = 0, converted = 0, count = 0;
+    table.querySelectorAll("tbody tr").forEach(tr => {
+      const checked = tr.querySelector(".row-check").checked;
+      const action = tr.querySelector("td.action select").value;
+      tr.classList.toggle("no-convert", action !== "convert");
+      if (checked && action === "convert") {
+        original += Number(tr.dataset.original);
+        converted += Number(tr.dataset.converted);
+        count += 1;
+      }
+    });
+    table.querySelector(".group-total-label").textContent =
+      `Total to convert (${count} row${count === 1 ? "" : "s"})`;
+    table.querySelector(".group-total-original").textContent =
+      count ? `${fmtFrom.format(original / 1000)} ${table.dataset.from}` : "—";
+    table.querySelector(".group-total-converted").textContent =
+      count ? fmtTo.format(converted / 1000) : "—";
+  }
+
+  document.querySelectorAll(".group-table").forEach(table => {
+    const groupCheck = table.querySelector(".group-check");
+    const rowChecks = [...table.querySelectorAll(".row-check")];
+    groupCheck.addEventListener("change", () => {
+      rowChecks.forEach(cb => { cb.checked = groupCheck.checked; });
+      updateGroup(table);
+    });
+    table.querySelectorAll(".row-check, td.action select").forEach(el =>
+      el.addEventListener("change", () => {
+        groupCheck.checked = rowChecks.every(cb => cb.checked);
+        updateGroup(table);
+      }));
+    updateGroup(table);  // also on load (back button / reload restores state)
+  });
+
+  // Loading state: approving all accounts is one bulk write per account, so
+  // disable the button and show progress instead of a dead wait.
+  const applyForm = document.getElementById("apply-all-form");
+  if (applyForm) {
+    applyForm.addEventListener("submit", () => {
+      const btn = document.getElementById("approve-all");
+      btn.disabled = true;
+      btn.textContent = "Updating YNAB…";
+    });
+  }
+</script>
+{% endblock %}

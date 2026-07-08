@@ -1,11 +1,11 @@
 """Account settings: connect/disconnect the user's YNAB credentials."""
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from .. import oauth
-from ..auth import require_login
+from ..auth import get_user_store, require_login
 from ..config import get_settings
 from ..connections import ConnectionStore
 from ..templates import templates
@@ -17,6 +17,10 @@ _FLASHES = {
     "connected": "YNAB connected.",
     "disconnected": "YNAB disconnected. You can revoke the grant any time from "
     "YNAB's security settings.",
+    "refresh_on": "Pending counts will now refresh automatically when you open "
+    "the conversions page.",
+    "refresh_off": "Automatic refresh turned off — pending counts update when "
+    "you preview.",
 }
 _ERRORS = {
     "denied": "YNAB authorization was cancelled or denied — nothing was connected.",
@@ -58,6 +62,20 @@ def settings_page(request: Request, user: User = Depends(require_login)):
 def disconnect(user: User = Depends(require_login)):
     get_connection_store().delete(user.id)
     return RedirectResponse("/settings?ok=disconnected", status_code=303)
+
+
+@router.post("/settings/refresh-on-load")
+def set_refresh_on_load(
+    user: User = Depends(require_login),
+    enabled: str = Form(default=""),
+):
+    """Toggle the opt-in 'refresh pending counts on page load'. A checkbox that
+    posts `enabled=on` when ticked, nothing when not."""
+    on = enabled == "on"
+    get_user_store().set_refresh_on_load(user.id, on)
+    return RedirectResponse(
+        f"/settings?ok={'refresh_on' if on else 'refresh_off'}", status_code=303
+    )
 
 
 @router.get("/oauth/ynab/start")
