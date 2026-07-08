@@ -4,7 +4,7 @@ All notable changes to this project are documented here. Versions use gstack's
 four-part `MAJOR.MINOR.PATCH.MICRO` scheme; the canonical version lives in the
 root `VERSION` file. New entries go directly under this header, newest first.
 
-## [0.3.1.1] - 2026-07-08
+## [0.3.1.2] - 2026-07-08
 
 ### Fixed
 - **The dashboard's "Preview all" button is now a working "Refresh" when
@@ -15,6 +15,14 @@ root `VERSION` file. New entries go directly under this header, newest first.
   styling, so it stayed bright blue and looked clickable while doing nothing.
   It now stays enabled and reads "Refresh", re-fetching every account and
   rewriting the cached pending counts.
+
+## [0.3.1.1] - 2026-07-08
+
+### Fixed
+- On a phone, the "Preview all", "Batch add", and "New conversion" buttons at
+  the top of the conversions page were crammed into a narrow column beside the
+  title with large gaps between them. On small screens the title now sits above
+  the buttons, which line up in a tidy row. Desktop layout is unchanged.
 
 ## [0.3.1.0] - 2026-07-08
 

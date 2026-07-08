@@ -294,6 +294,12 @@ form.inline button { margin: 0; }
   table { display: block; overflow-x: auto; }
   /* keep form controls at 16px: below that iOS Safari auto-zooms on focus */
   td.action select { font-size: 1rem; }
+  /* Stack the title above the action buttons instead of squeezing them into
+     a narrow column beside it (space-between). The buttons then sit in a tidy
+     wrapping row; zero the global button margin-top so they don't get large
+     vertical gaps when they wrap. */
+  .page-head { flex-direction: column; align-items: stretch; gap: 0.75rem; }
+  .head-actions > button, .head-actions > .button { margin-top: 0; }
 }
 
 footer {
