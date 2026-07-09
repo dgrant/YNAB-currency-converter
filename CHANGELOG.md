@@ -4,6 +4,41 @@ All notable changes to this project are documented here. Versions use gstack's
 four-part `MAJOR.MINOR.PATCH.MICRO` scheme; the canonical version lives in the
 root `VERSION` file. New entries go directly under this header, newest first.
 
+## [0.4.0.0] - 2026-07-09
+
+### Added
+- **Admin dashboard.** A new admin-only `/admin` page lists every user with
+  their sign-up date, number of conversions, transactions converted (since this
+  shipped), and last-active date. Access is gated by a per-user admin flag
+  granted out-of-band with `docker compose exec app python -m app.set_admin
+  <email>`; a logged-in non-admin gets a 404 (the page's existence isn't
+  disclosed). Admins also get an "Admin" link on the Settings page.
+- **Activity log + per-user metrics.** An append-only `events` table records
+  metadata for logins, sign-ups, conversion create/edit/delete, applies (with
+  the count of transactions converted), and YNAB connect/disconnect — never any
+  token, password, or transaction amount/memo. It's best-effort: a failed event
+  write is logged but never breaks the action it accompanies. The admin metrics
+  are aggregates over this table.
+- **Manual rate override in preview.** Each preview row now has an editable
+  rate. If you exchanged cash at a non-market rate or paid an FX fee, change the
+  rate and press "Recompute with my rates" to update that row's converted amount
+  and memo before approving. Only the rows you actually change are marked as
+  overridden.
+
+### Changed
+- **Same-currency conversions are rejected.** Creating or editing a conversion
+  whose original currency already equals the plan's currency is now a clear
+  error instead of failing later at preview (there's no rate to fetch and
+  nothing to convert). Batch-add silently skips such rows.
+- **New conversions default their start date ~30 days back** instead of today,
+  so a fresh conversion catches the transactions you entered before setting it
+  up. The field is still editable.
+
+### Internal
+- The account-name currency guess (e.g. "Chequing USD" → USD) is now backed by
+  a shared fixture exercised through both the Python and JavaScript
+  implementations, so they can't silently diverge.
+
 ## [0.3.1.2] - 2026-07-08
 
 ### Fixed
