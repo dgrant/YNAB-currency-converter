@@ -1,5 +1,6 @@
 """Same-currency rejection (a no-op that can only harm) and the earlier
 start-date default. Reuses the mocks/helpers from the full-flow test module."""
+import re
 from datetime import date, timedelta
 
 import respx
@@ -93,6 +94,10 @@ def test_new_form_defaults_start_date_to_lookback(app_client):
     expected = (date.today() - timedelta(days=30)).isoformat()
     form = app_client.get("/conversions/new")
     assert form.status_code == 200
-    assert f'value="{expected}"' in form.text
-    # explicitly not today's date
-    assert f'name="start_date"\n           value="{date.today().isoformat()}"' not in form.text
+    # Pull the start_date input's actual value out of the rendered HTML rather
+    # than substring-matching template whitespace (which would silently pass if
+    # the form is ever reflowed).
+    m = re.search(r'id="start_date"[^>]*\bvalue="([^"]+)"', form.text)
+    assert m is not None
+    assert m.group(1) == expected  # 30 days back, not today
+    assert m.group(1) != date.today().isoformat()

@@ -59,15 +59,17 @@ def test_preview_applies_manual_rate_override(app_client):
 
 @respx.mock
 def test_preview_ignores_invalid_rate_override(app_client):
-    """A blank, non-numeric, or non-positive rate falls back to the market rate
-    rather than producing a nonsense conversion."""
+    """A blank, non-numeric, non-positive, or absurdly large rate falls back to
+    the market rate rather than producing a nonsense conversion or a 500 (an
+    enormous-but-finite rate like 1e300 would overflow the Decimal context in
+    convert_milliunits if it weren't dropped up front)."""
     mock_budgets()
     _one_txn()
     _market_rate()
     token = login(app_client)
     cid = create_conversion(app_client, token, "a1", "Japan Trip")
 
-    for bad in ("abc", "0", "-1", ""):
+    for bad in ("abc", "0", "-1", "", "1e300", "nan", "inf"):
         resp = app_client.post(
             f"/conversions/{cid}/preview",
             data={"csrf_token": token, "rate_t1": bad},

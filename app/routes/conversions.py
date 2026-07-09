@@ -246,7 +246,6 @@ def _form_context(ynab: YNABClient) -> dict:
     return {
         "budgets": budgets,
         "currencies": currencies,
-        "today": date.today().isoformat(),
         "default_start": default_start,
     }
 
@@ -478,7 +477,11 @@ async def batch_create(
     accounts = await run_in_threadpool(_account_index, ynab)
     created = await run_in_threadpool(_create_batch, user.id, selected, form, accounts)
     if created:
-        events.record_event(
+        # run_in_threadpool: batch_create is async, and record_event does a
+        # blocking sqlite write (worse now that db.connect sets busy_timeout=5s)
+        # — keep it off the single worker's event loop, like the other DB calls.
+        await run_in_threadpool(
+            events.record_event,
             get_settings().data_dir, user.id, events.CONVERSION_CREATED,
             detail=f"batch:{created}",
         )
@@ -810,10 +813,16 @@ async def _apply_updates(
     return {"applied": updated, "skipped_splits": skipped_splits, "dropped": dropped}
 
 
+_MAX_OVERRIDE_RATE = 1e9  # comfortably above any real FX rate; see below
+
+
 def _parse_rate_overrides(form: FormData) -> dict[str, float]:
     """Per-row manual rate overrides from the preview form's `rate_<id>` fields.
-    A blank, non-numeric, or non-positive value is ignored (that row keeps the
-    market rate), so a tampered/empty field can never produce a nonsense rate."""
+    A blank, non-numeric, non-positive, non-finite, or absurdly large value is
+    ignored (that row keeps the market rate). The upper bound matters: an
+    enormous-but-finite rate (e.g. 1e300) would otherwise overflow the Decimal
+    context in convert_milliunits and surface as a 500 instead of just being
+    dropped."""
     overrides: dict[str, float] = {}
     for key in form:
         if not key.startswith("rate_"):
@@ -825,7 +834,7 @@ def _parse_rate_overrides(form: FormData) -> dict[str, float]:
             rate = float(raw)
         except ValueError:
             continue
-        if rate > 0 and math.isfinite(rate):
+        if math.isfinite(rate) and 0 < rate < _MAX_OVERRIDE_RATE:
             overrides[key[len("rate_"):]] = rate
     return overrides
 
@@ -940,8 +949,10 @@ async def apply(
     # routing single-preview has always had (401 -> reconnect, 429 -> its page).
     result = await _apply_updates(user.id, ynab, conversion, updates, meta)
     # count = transactions actually converted (the one summable metric the admin
-    # dashboard reads). Only apply events carry a count.
-    events.record_event(
+    # dashboard reads). Only apply events carry a count. run_in_threadpool: this
+    # is an async handler and record_event does a blocking sqlite write.
+    await run_in_threadpool(
+        events.record_event,
         get_settings().data_dir, user.id, events.APPLY,
         count=len(result["applied"]), detail=conversion_id,
     )
@@ -990,7 +1001,8 @@ async def apply_all(
                 {"account_name": conversion["account_name"], "error": str(exc)[:120]}
             )
             continue
-        events.record_event(
+        await run_in_threadpool(
+            events.record_event,
             get_settings().data_dir, user.id, events.APPLY,
             count=len(result["applied"]), detail=cid,
         )

@@ -126,12 +126,3 @@ class UserStore:
             return cur.rowcount > 0
         finally:
             conn.close()
-
-    def list_all(self) -> list[User]:
-        """Every user, oldest first — for the admin dashboard only."""
-        conn = db.connect(self.data_dir)
-        try:
-            rows = conn.execute("SELECT * FROM users ORDER BY created_at, id").fetchall()
-        finally:
-            conn.close()
-        return [_row_to_user(row) for row in rows]

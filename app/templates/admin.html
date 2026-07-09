@@ -25,10 +25,12 @@
   {% for u in users %}
     <tr>
       <td>{{ u.email }}</td>
-      <td>{{ u.created_at }}</td>
+      <td>{{ u.created_at[:10] }}</td>
       <td class="num">{{ u.conversions_count }}</td>
       <td class="num">{{ u.transactions_converted }}</td>
-      <td>{{ u.last_activity }}</td>
+      {# last_activity is a MAX over datetime (events/signup) and date-only
+         (last_synced) values; show just the date so the column is consistent. #}
+      <td>{{ u.last_activity[:10] }}</td>
       <td>{{ "✓" if u.is_admin else "" }}</td>
     </tr>
   {% endfor %}

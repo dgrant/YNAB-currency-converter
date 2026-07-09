@@ -181,7 +181,29 @@ above since it's feature work on top of an already-fixed safety issue.)*
 
 ## UX
 
-*(All items in this section are done — see Completed.)*
+### Preserve per-row selections across "Recompute with my rates"
+
+**What:** When the preview page reposts to `/preview` for a rate recompute, the
+server rebuilds the group fresh from YNAB, so any per-row choices the user made
+— unticked rows, or an Action set to "Already \<CUR\>" / "skip forever" — are
+reset to the defaults (ticked, "Convert").
+
+**Why:** A user who unticks a row or marks it skipped, then edits a rate and
+hits Recompute, silently gets those choices back to default. Not a data bug (the
+recomputed preview is shown again for review before Approve, so nothing is
+applied unseen), but a real annoyance that can lead to re-converting a row they'd
+excluded.
+
+**Context:** Found by three independent reviewers during `/review` of the
+rate-override work (2026-07-08). The recompute button posts the whole preview
+form (including `action_<id>`/`selected` fields) to `preview()`, which ignores
+them and re-renders from scratch. The fix is to thread the submitted
+action/selected state back into the re-rendered rows (or recompute client-side
+for the amount only). Deferred because doing it well is more than a couple of
+lines and the preview→approve safety net makes it low-risk.
+
+**Effort:** M
+**Priority:** P3
 
 ## Ops / deployment
 
