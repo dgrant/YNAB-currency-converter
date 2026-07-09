@@ -32,7 +32,7 @@
     {%- if r.error -%}
       <strong>{{ r.account_name }}: failed</strong> ({{ r.error }})
     {%- else -%}
-      {{ r.account_name }}: {{ r.applied }} applied{% if r.dropped %}, {{ r.dropped }} skipped{% endif %}
+      {{ r.account_name }}: {{ r.applied }} applied{% if r.categorized %}, {{ r.categorized }} categorized{% endif %}{% if r.approved %}, {{ r.approved }} approved{% endif %}{% if r.dropped %}, {{ r.dropped }} skipped{% endif %}
     {%- endif -%}
     {{ "; " if not loop.last }}
   {% endfor %}

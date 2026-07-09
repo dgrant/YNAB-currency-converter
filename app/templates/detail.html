@@ -7,6 +7,9 @@
 {% if applied is not none %}
 <div class="flash">
   {{ applied }} transaction{{ "s" if applied != 1 }} updated in YNAB.
+  {% if categorized %}Categorized {{ categorized }} to {{ conversion.default_category_name }}.{% endif %}
+  {% if dropped_categories %}{{ dropped_categories }} left uncategorized (transfer or the default category was removed in YNAB).{% endif %}
+  {% if approved %}Approved {{ approved }} in YNAB.{% endif %}
   {% if skipped_splits %}{{ skipped_splits }} skipped — became split transaction{{ "s" if skipped_splits != 1 }} since the preview.{% endif %}
   Preview again to check for anything new.
 </div>

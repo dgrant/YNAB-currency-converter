@@ -5,7 +5,7 @@ from datetime import date, timedelta
 
 import respx
 from httpx import Response
-from test_app_flow import FX, YNAB, create_conversion, login, mock_budgets
+from test_app_flow import FX, YNAB, create_conversion, login, mock_budgets, mock_categories
 
 
 @respx.mock
@@ -86,6 +86,7 @@ def test_new_form_defaults_start_date_to_lookback(app_client):
             {"id": "a1", "name": "Japan Trip", "deleted": False, "closed": False},
         ]}})
     )
+    mock_categories()
     respx.get(f"{FX}/currencies").mock(
         return_value=Response(200, json={"JPY": "Japanese Yen", "USD": "US Dollar"})
     )

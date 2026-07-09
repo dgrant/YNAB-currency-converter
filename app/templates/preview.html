@@ -26,6 +26,16 @@
 {% endif %}
 <form method="post" action="/conversions/{{ conversion.id }}/apply">
   {{ csrf_input(request) }}
+  <div class="convert-settings">
+    {% if conversion.default_category_id %}
+    <span class="convert-category">Converting → <strong>{{ conversion.default_category_name }}</strong>
+      <span class="hint">(transfers stay uncategorized)</span></span>
+    {% endif %}
+    <label class="checkbox">
+      <input type="checkbox" name="approve" {% if conversion.approve_on_apply %}checked{% endif %}>
+      Approve transactions in YNAB on apply
+    </label>
+  </div>
   <table>
     <thead>
       <tr>
@@ -55,8 +65,9 @@
         <td class="action">
           <select name="action_{{ row.id }}"
                   aria-label="Action for {{ row.payee_name or 'transaction' }} on {{ row.date }}"
-                  onchange="this.closest('tr').classList.toggle('no-convert', this.value !== 'convert')">
-            <option value="convert">Convert</option>
+                  onchange="this.closest('tr').classList.toggle('no-convert', !this.value.startsWith('convert'))">
+            <option value="convert">Convert{% if conversion.default_category_id %} → {{ conversion.default_category_name }}{% endif %}</option>
+            {% if conversion.default_category_id %}<option value="convert_nocat">Convert (no category)</option>{% endif %}
             <option value="already">Already {{ conversion.to_currency }} (memo ≈{{ row.equivalent_display }})</option>
             <option value="skip">Already {{ conversion.to_currency }} (skip forever)</option>
           </select>
@@ -100,12 +111,16 @@
 
   // Keep the footer honest: total only the rows that will actually be
   // converted (ticked + action "Convert"); memo-only rows don't change amounts.
+  // "convert" and "convert_nocat" both rewrite the amount (the latter just
+  // skips the category), so both count toward the converted total.
+  const isConvert = (v) => v === "convert" || v === "convert_nocat";
+
   function updateTotals() {
     let original = 0, converted = 0, count = 0;
     document.querySelectorAll("tbody tr").forEach(tr => {
       const checked = tr.querySelector(".row-check").checked;
       const action = tr.querySelector("td.action select").value;
-      if (checked && action === "convert") {
+      if (checked && isConvert(action)) {
         original += Number(tr.dataset.original);
         converted += Number(tr.dataset.converted);
         count += 1;
@@ -124,7 +139,7 @@
   // Also runs on load: browsers restoring form state (back button, reload)
   // don't fire change events, so re-sync the strikethrough and totals.
   document.querySelectorAll("td.action select").forEach(s =>
-    s.closest("tr").classList.toggle("no-convert", s.value !== "convert"));
+    s.closest("tr").classList.toggle("no-convert", !isConvert(s.value)));
   updateTotals();
 </script>
 {% else %}
