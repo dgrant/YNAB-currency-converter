@@ -20,7 +20,10 @@
 <p>{{ active | map(attribute="rows") | map("length") | sum }} unconverted transaction{{ "s" if active | map(attribute="rows") | map("length") | sum != 1 }}
    across {{ active | length }} account{{ "s" if active | length != 1 }}.
    Untick anything you don't want converted, then approve once.</p>
-<p class="hint">Nothing is written to YNAB until you approve.</p>
+<p class="hint">Each rate is the market rate for that transaction's date. If you exchanged
+   cash at a different rate or paid an FX fee, edit the rate and press
+   <strong>Recompute with my rates</strong> to update the converted amounts before
+   approving. Nothing is written to YNAB until you approve.</p>
 
 <form method="post" action="/conversions/apply-all" id="apply-all-form">
   {{ csrf_input(request) }}
@@ -75,7 +78,12 @@
           </td>
           <td class="memo">{{ row.old_memo }}</td>
           <td class="num">{{ row.original_display }}</td>
-          <td class="num fx">{{ row.rate_display }}</td>
+          <td class="num fx">
+            <input type="text" inputmode="decimal"
+                   class="rate-input{% if row.rate_overridden %} overridden{% endif %}"
+                   name="rate_{{ row.id }}" value="{{ row.rate_display }}"
+                   aria-label="Rate for {{ row.payee_name or 'transaction' }} on {{ row.date }}">
+          </td>
           <td class="num fx">{{ row.new_display }}</td>
         </tr>
         {% endfor %}
@@ -92,7 +100,11 @@
     </table>
   </section>
   {% endfor %}
-  <button type="submit" class="primary" id="approve-all">Approve &amp; update YNAB</button>
+  <div class="preview-actions">
+    <button type="submit" class="primary" id="approve-all">Approve &amp; update YNAB</button>
+    <button type="submit" class="secondary"
+            formaction="/conversions/preview-all">Recompute with my rates</button>
+  </div>
 </form>
 {% endif %}
 
@@ -171,7 +183,10 @@
   // disable the button and show progress instead of a dead wait.
   const applyForm = document.getElementById("apply-all-form");
   if (applyForm) {
-    applyForm.addEventListener("submit", () => {
+    applyForm.addEventListener("submit", (e) => {
+      // The "Recompute with my rates" button reposts the preview (no YNAB
+      // write), so only show the updating state for the actual approve submit.
+      if (e.submitter && e.submitter.id !== "approve-all") return;
       const btn = document.getElementById("approve-all");
       btn.disabled = true;
       btn.textContent = "Updating YNAB…";
