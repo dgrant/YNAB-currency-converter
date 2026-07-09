@@ -15,7 +15,26 @@ from test_app_flow import (
     create_conversion,
     login,
     mock_budgets,
+    mock_categories,
 )
+
+
+def _create_with_category(client, token, account_id, account_name,
+                          from_currency="JPY", category_id="cat2", approve=True):
+    """Create a conversion with a default category + approve flag (create
+    validates against get_categories, so mock_categories must be set)."""
+    data = {
+        "budget_id": "b1", "budget_name": "My Budget",
+        "account_id": account_id, "account_name": account_name,
+        "from_currency": from_currency, "to_currency": "USD",
+        "start_date": "2024-01-01", "default_category_id": category_id,
+        "csrf_token": token,
+    }
+    if approve:
+        data["approve_on_apply"] = "on"
+    r = client.post("/conversions", data=data, follow_redirects=False)
+    assert r.status_code == 303, r.text
+    return r.headers["location"].rsplit("/", 1)[-1]
 
 
 def _echo_patch(request):
@@ -214,6 +233,97 @@ def test_apply_all_partial_failure(app_client):
     # A advanced last_synced; B did not (write-after-success)
     assert _conversion_row(cid_a)["last_synced"] == date.today().isoformat()
     assert _conversion_row(cid_b)["last_synced"] is None
+
+
+@respx.mock
+def test_apply_all_per_group_category_and_approve(app_client):
+    """Apply-all is per-group: account A (default category + approve) sends
+    category_id + approved and drops the category on its transfer row; account B
+    (no default, no approve) sends neither — proving these aren't global flags.
+    Also proves the shared category cache means one categories fetch, not one
+    per group, and that dropped_categories is surfaced in the summary."""
+    mock_budgets()
+    mock_categories()
+    cat_route = respx.get(f"{YNAB}/budgets/b1/categories").mock(
+        return_value=Response(200, json={"data": {"category_groups": [
+            {"id": "cg1", "name": "Everyday", "deleted": False, "hidden": False,
+             "categories": [
+                 {"id": "cat2", "name": "2026 Japan Vacation", "deleted": False, "hidden": False},
+             ]},
+        ]}})
+    )
+    _mock_rates()
+    _mock_txns("a1", [_txn("t1"), _txn("tt", payee="Wire", transfer_account_id="acct-x")])
+    _mock_txns("a2", [_txn("t2", payee="Sushi")])
+    patch_route = respx.patch(f"{YNAB}/budgets/b1/transactions").mock(side_effect=_echo_patch)
+    token = login(app_client)
+    cid_a = _create_with_category(app_client, token, "a1", "Japan Trip")
+    cid_b = create_conversion(app_client, token, "a2", "Kyoto Trip")  # no category/approve
+    before = cat_route.call_count  # ignore create-time validation fetches
+
+    r = app_client.post("/conversions/apply-all", data={
+        "csrf_token": token,
+        "conversion_ids": [cid_a, cid_b],
+        f"default_category_id_{cid_a}": "cat2", f"approve_{cid_a}": "on",
+        f"selected_{cid_a}": ["t1", "tt"],
+        "action_t1": "convert", "original_t1": "-1817000",
+        "amount_t1": "-15990", "memo_t1": "m1",
+        "action_tt": "convert", "original_tt": "-1817000",
+        "amount_tt": "-15990", "memo_tt": "m-tt",
+        f"selected_{cid_b}": ["t2"],
+        "action_t2": "convert", "original_t2": "-1817000",
+        "amount_t2": "-15990", "memo_t2": "m2",
+    })
+    assert r.status_code == 200
+    by_id = {}
+    for call in patch_route.calls:
+        for row in json.loads(call.request.content)["transactions"]:
+            by_id[row["id"]] = row
+    # A's normal row: categorized + approved
+    assert by_id["t1"]["category_id"] == "cat2" and by_id["t1"]["approved"] is True
+    # A's transfer row: approved but category dropped
+    assert "category_id" not in by_id["tt"] and by_id["tt"]["approved"] is True
+    # B's row: no category, no approve (per-group isolation, not global)
+    assert "category_id" not in by_id["t2"] and "approved" not in by_id["t2"]
+    # apply-time: only A had a category, so exactly one apply-time fetch
+    assert cat_route.call_count - before == 1
+    # the summary reports A's categorized + dropped + approved
+    assert "Japan Trip: 2 applied, 1 categorized, 1 left uncategorized, 2 approved" in r.text
+
+
+@respx.mock
+def test_apply_all_shares_category_cache_across_budget(app_client):
+    """Two accounts in the same budget both categorizing: apply-all fetches that
+    budget's category list once (shared cache), not once per group."""
+    mock_budgets()
+    mock_categories()
+    cat_route = respx.get(f"{YNAB}/budgets/b1/categories").mock(
+        return_value=Response(200, json={"data": {"category_groups": [
+            {"id": "cg1", "name": "Everyday", "deleted": False, "hidden": False,
+             "categories": [
+                 {"id": "cat2", "name": "2026 Japan Vacation", "deleted": False, "hidden": False},
+             ]},
+        ]}})
+    )
+    _mock_rates()
+    _mock_txns("a1", [_txn("t1")])
+    _mock_txns("a2", [_txn("t2", payee="Sushi")])
+    respx.patch(f"{YNAB}/budgets/b1/transactions").mock(side_effect=_echo_patch)
+    token = login(app_client)
+    cid_a = _create_with_category(app_client, token, "a1", "Japan Trip")
+    cid_b = _create_with_category(app_client, token, "a2", "Kyoto Trip")
+    before = cat_route.call_count
+
+    app_client.post("/conversions/apply-all", data={
+        "csrf_token": token,
+        "conversion_ids": [cid_a, cid_b],
+        f"default_category_id_{cid_a}": "cat2", f"selected_{cid_a}": ["t1"],
+        "action_t1": "convert", "original_t1": "-1817000", "amount_t1": "-15990", "memo_t1": "m1",
+        f"default_category_id_{cid_b}": "cat2", f"selected_{cid_b}": ["t2"],
+        "action_t2": "convert", "original_t2": "-1817000", "amount_t2": "-15990", "memo_t2": "m2",
+    })
+    # both groups validated their category against ONE fetch, not two
+    assert cat_route.call_count - before == 1
 
 
 @respx.mock

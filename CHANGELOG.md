@@ -4,7 +4,7 @@ All notable changes to this project are documented here. Versions use gstack's
 four-part `MAJOR.MINOR.PATCH.MICRO` scheme; the canonical version lives in the
 root `VERSION` file. New entries go directly under this header, newest first.
 
-## [0.4.2.0] - 2026-07-09
+## [0.5.1.0] - 2026-07-09
 
 ### Added
 - **Sort transactions in the preview tables by clicking a column header.** The
@@ -15,6 +15,29 @@ root `VERSION` file. New entries go directly under this header, newest first.
   keeps every row's tick state, action, and edited rate — nothing is sent to
   YNAB and the totals are unchanged. Previously these tables could only be read
   in the order YNAB returned them.
+
+## [0.5.0.0] - 2026-07-09
+
+### Added
+- **Set a default category and approve transactions during a conversion.** Each
+  account's conversion config gains an optional default YNAB category and an
+  "approve on apply" toggle. When you apply a preview, converted transactions
+  are categorized to that default and (if the toggle is on) marked approved in
+  YNAB — so a post-vacation pile clears in one pass instead of a second trip
+  into YNAB to categorize and approve by hand. The category shows as a banner
+  above the preview; a per-row **Convert (no category)** action opts individual
+  rows out (e.g. a one-off purchase you'll categorize yourself). Approval is
+  opt-in (off by default), so existing conversions are unaffected until you turn
+  it on. On the "Preview all" dashboard each account carries its own category
+  and approve toggle.
+
+### Notes
+- Transfers can't take a category in YNAB, so they're always converted/approved
+  but left uncategorized. If a default category is archived or hidden in YNAB
+  after you set it, that apply leaves those rows uncategorized (and says so)
+  rather than failing the whole batch. The category picker and validation are a
+  best-effort convenience: a YNAB categories hiccup disables the picker or skips
+  the drop instead of blocking the core conversion.
 
 ## [0.4.1.0] - 2026-07-09
 

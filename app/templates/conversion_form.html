@@ -27,6 +27,17 @@
     <input type="date" id="start_date" name="start_date"
            value="{{ conversion.start_date if conversion else default_start }}" required>
 
+    <label for="default_category">Default category (optional)</label>
+    <select id="default_category" name="default_category_id"></select>
+    <p class="hint" id="category_hint">Applied to converted transactions in this account.
+       Leave uncategorized to set the category yourself in YNAB.</p>
+
+    <label class="checkbox">
+      <input type="checkbox" id="approve_on_apply" name="approve_on_apply"
+             {% if conversion and conversion.approve_on_apply %}checked{% endif %}>
+      Approve transactions in YNAB when I apply
+    </label>
+
     <input type="hidden" name="budget_name" id="budget_name">
     <input type="hidden" name="account_name" id="account_name">
     <button type="submit" class="primary">
@@ -47,6 +58,8 @@
   const accountSelect = document.getElementById("account");
   const fromCurrency = document.getElementById("from_currency");
   const toCurrencyDisplay = document.getElementById("to_currency_display");
+  const categorySelect = document.getElementById("default_category");
+  const categoryHint = document.getElementById("category_hint");
 
   for (const b of budgets) {
     budgetSelect.add(new Option(b.name, b.id));
@@ -72,7 +85,31 @@
     guessFromCurrency();
   }
 
-  budgetSelect.addEventListener("change", refreshAccounts);
+  // Categories are budget-scoped, so the picker is rebuilt whenever the plan
+  // changes (mirrors refreshAccounts). Selecting a plan whose categories YNAB
+  // couldn't fetch disables the field rather than offering an empty dropdown.
+  function refreshCategories(preserve) {
+    const previous = preserve ? categorySelect.value : "";
+    const budget = budgets.find(b => b.id === budgetSelect.value);
+    const groups = (budget && budget.categories) || [];
+    categorySelect.innerHTML = "";
+    categorySelect.add(new Option("— Leave uncategorized (no default) —", ""));
+    for (const group of groups) {
+      const optgroup = document.createElement("optgroup");
+      optgroup.label = group.name;
+      for (const c of group.categories) optgroup.appendChild(new Option(c.name, c.id));
+      categorySelect.add(optgroup);
+    }
+    categorySelect.disabled = groups.length === 0;
+    categoryHint.hidden = false;
+    if (groups.length === 0) {
+      categoryHint.textContent =
+        "Categories are unavailable for this plan right now — you can set one later by editing.";
+    }
+    if (previous) categorySelect.value = previous;
+  }
+
+  budgetSelect.addEventListener("change", () => { refreshAccounts(); refreshCategories(false); });
 
   // Smart default: if the account name contains a currency code ("Chequing
   // USD"), preselect it as the original currency. Never overrides a currency
@@ -97,10 +134,25 @@
     budgetSelect.value = conversion.budget_id;
   }
   refreshAccounts();
+  refreshCategories(false);
   if (conversion) {
     accountSelect.value = conversion.account_id;
     fromCurrency.value = conversion.from_currency;
     initializing = false;
+    if (conversion.default_category_id) {
+      categorySelect.value = conversion.default_category_id;
+      // Saved category was archived/deleted in YNAB since it was set: it's not
+      // in the fetched list, so the select fell back to "no default". Surface
+      // what it was and let the user re-pick, rather than silently blanking it.
+      if (categorySelect.value !== conversion.default_category_id) {
+        const gone = new Option(
+          "⚠ " + (conversion.default_category_name || "previous category") +
+          " — removed or hidden in YNAB, will clear on save", "");
+        categorySelect.add(gone, categorySelect.options[1] || null);
+        categorySelect.value = "";
+        gone.selected = true;
+      }
+    }
   }
 
   document.getElementById("conversion-form").addEventListener("submit", () => {

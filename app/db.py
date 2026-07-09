@@ -37,7 +37,10 @@ CREATE TABLE IF NOT EXISTS conversions (
     start_date    TEXT NOT NULL,
     last_synced   TEXT,
     pending_count      INTEGER,
-    pending_checked_at TEXT
+    pending_checked_at TEXT,
+    default_category_id   TEXT,
+    default_category_name TEXT,
+    approve_on_apply      INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_conversions_user ON conversions(user_id);
@@ -83,6 +86,16 @@ _MIGRATIONS = (
     # a fresh DB gets it via CREATE TABLE. The matching read is _row_to_user in
     # users.py — miss that and require_admin 404s everyone, David included.
     ("users", "is_admin", "INTEGER NOT NULL DEFAULT 0"),
+    # Per-account default YNAB category applied to converted transactions, and
+    # whether an apply also flips YNAB's `approved` flag. The name is stored
+    # alongside the id (denormalized, like budget_name/account_name) so the
+    # preview banner and detail page show it without a categories fetch. Both
+    # written by the conversion form; read by store._CONFIG. approve_on_apply
+    # defaults to 0 (opt-in) so shipping this never silently auto-approves an
+    # existing user's next pile — see the design doc's gate decision.
+    ("conversions", "default_category_id", "TEXT"),
+    ("conversions", "default_category_name", "TEXT"),
+    ("conversions", "approve_on_apply", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
