@@ -185,7 +185,15 @@ def build_preview(
         if not is_convertible(txn):
             continue
         override = overrides.get(txn["id"])
-        rate = override if override is not None else rates.rate_for(date.fromisoformat(txn["date"]))
+        market_rate = rates.rate_for(date.fromisoformat(txn["date"]))
+        rate = override if override is not None else market_rate
+        # "Overridden" only when the submitted rate actually differs from the
+        # market rate. The preview form reposts EVERY rate_<id> field (including
+        # rows the user left at their prefilled market value), so a bare
+        # "override is not None" would flag every row after any recompute.
+        # Compare the formatted strings (what the field shows) so a rate left
+        # untouched isn't flagged and float precision can't fake a difference.
+        rate_overridden = override is not None and format_rate(override) != format_rate(market_rate)
         new_milliunits = convert_milliunits(txn["amount"], rate, to_currency)
         # For the "already in budget currency" action: the amount stays as-is,
         # so its original-currency equivalent goes in the memo instead.
@@ -200,7 +208,7 @@ def build_preview(
                 "original_display": format_original(txn["amount"], from_currency),
                 "rate": rate,
                 "rate_display": format_rate(rate),
-                "rate_overridden": override is not None,
+                "rate_overridden": rate_overridden,
                 "new_milliunits": new_milliunits,
                 "new_display": format_amount(new_milliunits, to_currency),
                 "new_memo": build_memo(txn.get("memo"), txn["amount"], from_currency, rate),
