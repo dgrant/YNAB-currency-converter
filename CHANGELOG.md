@@ -4,6 +4,16 @@ All notable changes to this project are documented here. Versions use gstack's
 four-part `MAJOR.MINOR.PATCH.MICRO` scheme; the canonical version lives in the
 root `VERSION` file. New entries go directly under this header, newest first.
 
+## [0.4.1.0] - 2026-07-09
+
+### Fixed
+- **Manual rate override now works on the "Preview all" dashboard, not just the
+  single-account preview.** The combined preview showed each rate as read-only
+  text, so an FX-fee/cash-rate override could only be applied one account at a
+  time. Each rate is now an editable field with a "Recompute with my rates"
+  button, matching the single-account page; only the rows you actually change
+  are marked overridden, and nothing is written to YNAB until you approve.
+
 ## [0.4.0.0] - 2026-07-09
 
 ### Added

@@ -246,6 +246,48 @@ def test_badge_count_matches_next_preview(app_client):
 
 
 @respx.mock
+def test_preview_all_renders_editable_rate(app_client):
+    """The dashboard preview shows each rate as an editable rate_<id> input and
+    a 'Recompute with my rates' button, matching the single-preview page."""
+    mock_budgets()
+    _mock_rates()
+    _mock_txns("a1", [_txn("t1")])
+    token = login(app_client)
+    create_conversion(app_client, token, "a1", "Japan Trip")
+
+    r = app_client.post("/conversions/preview-all", data={"csrf_token": token})
+    assert r.status_code == 200
+    assert 'name="rate_t1"' in r.text
+    assert 'value="0.0087987"' in r.text            # market rate prefilled
+    assert "Recompute with my rates" in r.text
+    assert "overridden" not in r.text               # nothing changed yet
+
+
+@respx.mock
+def test_preview_all_applies_manual_rate_override(app_client):
+    """Reposting the dashboard preview with a manual rate recomputes that row's
+    amount and memo — the same override support the single-preview page has,
+    and the fix for 'override only works on the conversion-specific page'."""
+    mock_budgets()
+    _mock_rates()
+    _mock_txns("a1", [_txn("t1"), _txn("t2", payee="Sushi")])
+    token = login(app_client)
+    create_conversion(app_client, token, "a1", "Japan Trip")
+
+    # t1 overridden to 0.009; t2 left at its prefilled market rate.
+    r = app_client.post("/conversions/preview-all", data={
+        "csrf_token": token, "rate_t1": "0.009", "rate_t2": "0.0087987",
+    })
+    assert r.status_code == 200
+    # Only t1 is flagged overridden (the reposted t2 rate matches the market).
+    assert r.text.count("rate-input overridden") == 1
+    # t1 recomputed at the manual rate; t2 stays at the market amount.
+    assert 'name="amount_t1" value="-16350"' in r.text
+    assert 'name="amount_t2" value="-15990"' in r.text
+    assert "-1,817 JPY (FX rate: 0.009)" in r.text   # memo marker carries new rate
+
+
+@respx.mock
 def test_preview_all_requires_csrf(app_client):
     mock_budgets()
     token = login(app_client)

@@ -877,7 +877,7 @@ async def preview(
 
 
 @router.post("/conversions/preview-all")
-def preview_all(
+async def preview_all(
     request: Request,
     user: User = Depends(require_login),
     ynab: YNABClient = Depends(require_ynab),
@@ -886,8 +886,17 @@ def preview_all(
     upstream failures (a rate outage, a non-auth YNAB error) render as a failed
     group and don't blank the rest; a 401 (revoked token) or 429 (budget
     exhausted) re-raises to the global handler — 401 reconnects, 429 stops the
-    loop instead of firing N more requests into a rate-limited API."""
-    conversions = get_store().load(user.id)
+    loop instead of firing N more requests into a rate-limited API.
+
+    The dashboard's "Preview all" button POSTs no rate fields (overrides is
+    empty); the page's "Recompute with my rates" button reposts here with the
+    per-row rate_<id> fields, exactly like the single-preview flow. Transaction
+    ids are globally unique in YNAB, so one flat overrides dict is safe to hand
+    to every group — build_preview only applies the ids present in each group.
+    This handler is async (to await the form), so its blocking sqlite/httpx
+    calls go through run_in_threadpool — the same discipline as apply_all."""
+    overrides = _parse_rate_overrides(await request.form())
+    conversions = await run_in_threadpool(get_store().load, user.id)
     if not conversions:
         return RedirectResponse("/conversions", status_code=303)
     groups = []
@@ -895,7 +904,7 @@ def preview_all(
     checked_at = _utcnow_iso()
     for conversion in conversions:
         try:
-            group = _build_group(ynab, conversion)
+            group = await run_in_threadpool(_build_group, ynab, conversion, overrides)
         except YNABError as exc:
             if exc.status_code in (401, 429):
                 raise
@@ -904,8 +913,10 @@ def preview_all(
         except RatesError as exc:
             groups.append(_failed_group(conversion, str(exc)))
             continue
-        get_store().mark_synced(user.id, conversion["id"], now_date)
-        get_store().set_pending(user.id, conversion["id"], group["pending_count"], checked_at)
+        await run_in_threadpool(get_store().mark_synced, user.id, conversion["id"], now_date)
+        await run_in_threadpool(
+            get_store().set_pending, user.id, conversion["id"], group["pending_count"], checked_at
+        )
         groups.append(group)
     total_pending = sum(g["pending_count"] for g in groups if g["error"] is None)
     return templates.TemplateResponse(
