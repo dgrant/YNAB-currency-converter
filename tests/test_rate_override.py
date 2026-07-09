@@ -2,7 +2,14 @@
 to the preview endpoint recomputes that row's amount and memo marker."""
 import respx
 from httpx import Response
-from test_app_flow import FX, YNAB, create_conversion, login, mock_budgets
+from test_app_flow import (
+    FX,
+    YNAB,
+    assert_sortable_markup,
+    create_conversion,
+    login,
+    mock_budgets,
+)
 
 
 def _one_txn():
@@ -46,12 +53,7 @@ def test_preview_transaction_table_is_sortable(app_client):
     r = app_client.post(f"/conversions/{cid}/preview", data={"csrf_token": token})
     assert r.status_code == 200
     assert 'class="sortable"' in r.text
-    assert 'data-sort="date"' in r.text
-    assert 'data-sort="payee"' in r.text
-    assert 'data-sort="original"' in r.text
-    assert 'data-sort="converted"' in r.text
-    assert 'data-sort-value="-1817000"' in r.text  # raw milliunits, not "-1,817"
-    assert "/static/sortable.js" in r.text
+    assert_sortable_markup(r.text)
 
 
 @respx.mock

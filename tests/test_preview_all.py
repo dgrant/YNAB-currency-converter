@@ -11,6 +11,7 @@ from httpx import Response
 from test_app_flow import (
     FX,
     YNAB,
+    assert_sortable_markup,
     create_conversion,
     login,
     mock_budgets,
@@ -112,12 +113,7 @@ def test_preview_all_transaction_table_is_sortable(app_client):
     r = app_client.post("/conversions/preview-all", data={"csrf_token": token})
     assert r.status_code == 200
     assert "group-table sortable" in r.text
-    assert 'data-sort="date"' in r.text
-    assert 'data-sort="payee"' in r.text
-    assert 'data-sort="original"' in r.text
-    assert 'data-sort="converted"' in r.text
-    assert 'data-sort-value="-1817000"' in r.text  # raw milliunits, not "-1,817"
-    assert "/static/sortable.js" in r.text
+    assert_sortable_markup(r.text)
 
 
 @respx.mock

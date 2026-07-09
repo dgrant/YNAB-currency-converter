@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import sortable_headers %}
 {% block content %}
 <div class="page-head">
   <h1>Preview: {{ conversion.account_name }}</h1>
@@ -30,13 +31,7 @@
     <thead>
       <tr>
         <th><input type="checkbox" checked onclick="document.querySelectorAll('.row-check').forEach(c => c.checked = this.checked); updateTotals()"></th>
-        <th data-sort="date" data-sort-type="text"><button type="button" class="sort">Date <span class="arrow"></span></button></th>
-        <th data-sort="payee" data-sort-type="text"><button type="button" class="sort">Payee <span class="arrow"></span></button></th>
-        <th>Action</th>
-        <th class="memo">Memo</th>
-        <th class="num" data-sort="original" data-sort-type="number"><button type="button" class="sort">Original ({{ conversion.from_currency }}) <span class="arrow"></span></button></th>
-        <th class="num" data-sort="rate" data-sort-type="number"><button type="button" class="sort">Rate <span class="arrow"></span></button></th>
-        <th class="num" data-sort="converted" data-sort-type="number"><button type="button" class="sort">Converted ({{ conversion.to_currency }}) <span class="arrow"></span></button></th>
+        {{ sortable_headers(conversion.from_currency, conversion.to_currency) }}
       </tr>
     </thead>
     <tbody>

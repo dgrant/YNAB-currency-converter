@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import sortable_headers %}
 {% block title %}Preview all — Currency Converter for YNAB{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -46,13 +47,7 @@
         <tr>
           <th><input type="checkbox" class="group-check" checked
                      aria-label="Select all for {{ c.account_name }}"></th>
-          <th data-sort="date" data-sort-type="text"><button type="button" class="sort">Date <span class="arrow"></span></button></th>
-          <th data-sort="payee" data-sort-type="text"><button type="button" class="sort">Payee <span class="arrow"></span></button></th>
-          <th>Action</th>
-          <th class="memo">Memo</th>
-          <th class="num" data-sort="original" data-sort-type="number"><button type="button" class="sort">Original ({{ c.from_currency }}) <span class="arrow"></span></button></th>
-          <th class="num" data-sort="rate" data-sort-type="number"><button type="button" class="sort">Rate <span class="arrow"></span></button></th>
-          <th class="num" data-sort="converted" data-sort-type="number"><button type="button" class="sort">Converted ({{ c.to_currency }}) <span class="arrow"></span></button></th>
+          {{ sortable_headers(c.from_currency, c.to_currency) }}
         </tr>
       </thead>
       <tbody>
