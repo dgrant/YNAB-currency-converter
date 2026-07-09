@@ -28,6 +28,7 @@
   {{ csrf_input(request) }}
   <div class="convert-settings">
     {% if conversion.default_category_id %}
+    <input type="hidden" name="default_category_id" value="{{ conversion.default_category_id }}">
     <span class="convert-category">Converting → <strong>{{ conversion.default_category_name }}</strong>
       <span class="hint">(transfers stay uncategorized)</span></span>
     {% endif %}

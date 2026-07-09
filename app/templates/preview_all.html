@@ -41,6 +41,7 @@
     {% endif %}
     <div class="convert-settings">
       {% if c.default_category_id %}
+      <input type="hidden" name="default_category_id_{{ c.id }}" value="{{ c.default_category_id }}">
       <span class="convert-category">Converting → <strong>{{ c.default_category_name }}</strong>
         <span class="hint">(transfers stay uncategorized)</span></span>
       {% endif %}

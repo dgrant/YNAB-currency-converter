@@ -47,7 +47,7 @@ def _create(client, token, category_id="cat2", approve=True):
     return resp.headers["location"].rsplit("/", 1)[-1]
 
 
-def _apply(client, token, conversion_id, action="convert", approve=True):
+def _apply(client, token, conversion_id, action="convert", approve=True, category_id="cat2"):
     data = {
         "selected": ["t1"], "action_t1": action, "original_t1": "-1817000",
         "amount_t1": "-15990", "memo_t1": "-1,817 JPY (FX rate: 0.0087987)",
@@ -55,6 +55,11 @@ def _apply(client, token, conversion_id, action="convert", approve=True):
     }
     if approve:
         data["approve"] = "on"
+    # The preview renders the account's default category as a hidden field; apply
+    # reads it from the form (the stateless preview->approve contract), so the
+    # test posts it too. Pass category_id=None to simulate no default.
+    if category_id:
+        data["default_category_id"] = category_id
     return client.post(f"/conversions/{conversion_id}/apply", data=data)
 
 
@@ -145,6 +150,112 @@ def test_transfer_row_keeps_approve_but_drops_category(app_client):
     assert "category_id" not in row  # dropped: transfers reject categories
     assert row["approved"] is True
     assert "1 left uncategorized" in resp.text
+
+
+@respx.mock
+def test_convert_nocat_stale_amount_is_dropped(app_client):
+    """convert_nocat is a convert (rewrites the amount), so the write-time
+    amount-changed re-check must drop it when the re-fetched amount differs from
+    the previewed one — same guard as plain convert."""
+    mock_budgets()
+    mock_categories()
+    # apply-time re-fetch shows a DIFFERENT amount than the previewed original
+    _mock_transactions([
+        {"id": "t1", "date": "2024-01-05", "amount": -2000000,
+         "payee_name": "Shoes", "memo": None, "deleted": False},
+    ])
+    _mock_rates()
+    patch_route = _mock_patch()
+    token = login(app_client)
+    cid = _create(app_client, token)
+    resp = _apply(app_client, token, cid, action="convert_nocat", approve=True)
+
+    assert not patch_route.called  # stale row dropped, nothing sent
+    assert str(resp.url).endswith("?applied=0")
+
+
+@respx.mock
+def test_approve_on_already_row(app_client):
+    """The apply-wide approve applies to memo-only rows too: an 'already' row
+    gets approved:true but never an amount or a category."""
+    mock_budgets()
+    mock_categories()
+    _mock_transactions([
+        {"id": "t1", "date": "2024-01-05", "amount": -1817000,
+         "payee_name": "Domestic", "memo": None, "deleted": False},
+    ])
+    _mock_rates()
+    patch_route = _mock_patch()
+    token = login(app_client)
+    cid = _create(app_client, token)
+    data = {
+        "selected": ["t1"], "action_t1": "already", "original_t1": "-1817000",
+        "amount_t1": "-15990", "memo_t1": "m", "already_memo_t1": "≈ note",
+        "skip_memo_t1": "(skipped)", "approve": "on",
+        "default_category_id": "cat2", "csrf_token": token,
+    }
+    app_client.post(f"/conversions/{cid}/apply", data=data)
+    row = json.loads(patch_route.calls[0].request.content)["transactions"][0]
+    assert row["approved"] is True
+    assert "amount" not in row and "category_id" not in row
+
+
+@respx.mock
+def test_apply_without_default_category_makes_no_categories_call(app_client):
+    """A conversion with no default category must not trigger the apply-time
+    categories fetch — the extra YNAB call is only paid when the feature is used."""
+    mock_budgets()
+    cat_route = respx.get(f"{YNAB}/budgets/b1/categories").mock(
+        return_value=Response(200, json={"data": {"category_groups": []}})
+    )
+    _mock_transactions([
+        {"id": "t1", "date": "2024-01-05", "amount": -1817000,
+         "payee_name": "Ramen", "memo": None, "deleted": False},
+    ])
+    _mock_rates()
+    _mock_patch()
+    token = login(app_client)
+    # create WITHOUT a category (create also must not hit categories)
+    cid = _create(app_client, token, category_id="", approve=False)
+    _apply(app_client, token, cid, action="convert", approve=False, category_id=None)
+    assert cat_route.call_count == 0
+
+
+@respx.mock
+def test_new_form_degrades_when_categories_unavailable(app_client):
+    """A categories fetch failure disables the picker but still renders the form
+    (200), never a 500 — categories are an optional convenience."""
+    mock_budgets(iso_code="USD")
+    respx.get(f"{YNAB}/budgets/b1/accounts").mock(
+        return_value=Response(200, json={"data": {"accounts": [
+            {"id": "a1", "name": "Japan Trip", "deleted": False, "closed": False},
+        ]}})
+    )
+    respx.get(f"{YNAB}/budgets/b1/categories").mock(return_value=Response(500, text="down"))
+    respx.get(f"{FX}/currencies").mock(
+        return_value=Response(200, json={"JPY": "Japanese Yen", "USD": "US Dollar"})
+    )
+    login(app_client)
+    form = app_client.get("/conversions/new")
+    assert form.status_code == 200
+    assert 'id="default_category"' in form.text  # picker still present, just empty
+
+
+@respx.mock
+def test_edit_rejects_category_not_in_budget(app_client):
+    """The edit route validates the default category too (second call site)."""
+    mock_budgets()
+    mock_categories()
+    _mock_transactions([])
+    token = login(app_client)
+    cid = _create(app_client, token, category_id="cat2")
+    resp = app_client.post(f"/conversions/{cid}/edit", data={
+        "budget_id": "b1", "budget_name": "My Budget",
+        "account_id": "a1", "account_name": "Japan Trip",
+        "from_currency": "JPY", "to_currency": "USD", "start_date": "2024-01-01",
+        "default_category_id": "bogus", "csrf_token": token,
+    }, follow_redirects=False)
+    assert resp.status_code == 400
 
 
 @respx.mock
