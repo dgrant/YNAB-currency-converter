@@ -14,25 +14,6 @@ milliunit math, preview→approve contract).
 
 ## Features
 
-### Submit the OAuth App Review form
-
-**What:** File the YNAB OAuth App Review (Asana form) now that every
-prerequisite has landed.
-
-**Why:** A freshly registered OAuth app is token-capped (~25 access
-tokens); beyond a handful of connected users, new "Connect to YNAB"
-authorizations fail. Clearing Restricted Mode is the only way to grow past
-friends-and-family scale.
-
-**Context:** All review prerequisites are done: footer trademark
-disclaimer, real Privacy Policy page, "Plan" not "budget" branding, name
-uniqueness confirmed against the Works With YNAB list, and auth is
-OAuth-only (the form requires this). Nothing else blocks submission.
-
-**Effort:** S
-**Priority:** P1
-**Depends on:** None (all prerequisites already shipped — see Completed)
-
 ### Convert split transactions properly
 
 **What:** Convert each subtransaction of a split with the same rate,
@@ -47,6 +28,10 @@ card).
 `subtransactions`) are detected, skipped in `build_preview`, and counted
 with a note in the preview, so apply can no longer corrupt them. This item
 is the remaining feature work to actually convert them instead of skipping.
+A CEO/eng review (2026-07-08, during the admin/observability work) flagged
+this as the highest user-facing value of the open feature items — it's a
+live correctness gap on real financial data — so it's the recommended next
+cycle after the admin dashboard.
 
 **Effort:** L
 **Priority:** P1
@@ -125,20 +110,6 @@ out here as its own task.
 **Priority:** P2
 **Depends on:** Shares email infrastructure with Notifications for pending conversions
 
-### Manual rate override in preview
-
-**What:** An editable rate per row in preview (recompute amount
-client-side or on re-preview).
-
-**Why:** Cash exchanged at a non-market rate, or card FX fees, mean the
-Frankfurter rate isn't always the right one.
-
-**Context:** No blockers; touches `build_preview` and the preview
-template/form contract.
-
-**Effort:** M
-**Priority:** P3
-
 ### Google Sign-In
 
 **What:** Replace the password routes with an OIDC flow that sets the
@@ -169,30 +140,6 @@ this kind of swap-in.
 
 ## Correctness & robustness
 
-### Reject same-currency conversions
-
-**What:** Reject creating (or editing) a conversion whose `from_currency`
-equals the plan's derived `to_currency`, and skip such rows in
-batch-create. Ideally surface it in the form UI too (disable/flag the
-matching currency once the plan currency is known).
-
-**Why:** A conversion from a currency to itself is a no-op that can only
-do harm: Frankfurter has no self-pair rate to fetch (so preview errors),
-and even if it returned 1.0 it would rewrite amounts and stamp memos for
-nothing. It's never a valid config, so it should be rejected up front
-rather than failing later at preview.
-
-**Context:** `to_currency` is already derived from the plan
-(`_budget_currency`) rather than posted, and create/edit already reject a
-wrong *direction* mismatch — this is the adjacent equal-currency case that
-check doesn't cover. The natural home is alongside that validation in the
-create/edit handlers in `routes/conversions.py` (a 400, like the existing
-direction check), plus the skip path in batch-create where other invalid
-rows are already dropped rather than failing the whole batch.
-
-**Effort:** S
-**Priority:** P2
-
 ### Cap or chunk large previews / applies
 
 **What:** Bound the work a single preview/apply does when a conversion's
@@ -217,36 +164,16 @@ preview→approve hidden-field contract and the per-conversion apply lock,
 and mark `last_synced` / advance `start_date` only after all chunks
 succeed (or define partial-success semantics). Low urgency: the post-apply
 `start_date` auto-advance means only the *first* oversized run hurts, and
-friends-and-family accounts rarely hit it. Pairs with "Default the start
-date earlier than today," which makes big first previews more common.
+friends-and-family accounts rarely hit it. Now more likely to matter since
+the start-date default moved ~30 days back (shipped 2026-07-08), which makes
+big first previews more common.
 
 **Effort:** M
 **Priority:** P4
 
-### Shared test for the currency-guess heuristic (Python + JS)
-
-**What:** The account-name-to-currency-code guess (e.g. "Chequing USD" →
-preselect USD) is implemented twice — `_guess_currency` in
-`routes/conversions.py` for the batch form, and inline JS in
-`conversion_form.html` for the single new/edit form — with no shared test
-asserting the two agree on the same account names.
-
-**Why:** A future edit to one implementation (e.g. the regex/split logic)
-could silently diverge from the other, so the same account name gets
-guessed differently depending on which form the user is on.
-
-**Context:** Found during review of the batch-create feature (2026-07).
-Not urgent — both implementations are simple and were added together — but
-worth a shared fixture list of account names run through both, or unifying
-on one implementation, before either one changes again.
-
-**Effort:** S
-**Priority:** P3
-
-*(All other items in this section are done — see Completed. The one other
-open correctness item, "Convert split transactions properly," is filed
-under Features above since it's feature work on top of an already-fixed
-safety issue.)*
+*(Everything else in this section is done — see Completed. "Convert split
+transactions properly," also a correctness item, is filed under Features
+above since it's feature work on top of an already-fixed safety issue.)*
 
 ## Security
 
@@ -254,26 +181,28 @@ safety issue.)*
 
 ## UX
 
-### Default the start date earlier than today
+### Preserve per-row selections across "Recompute with my rates"
 
-**What:** Prefill the new-conversion and batch-create forms with a start
-date some way in the past (e.g. ~30 days back, or the start of the current
-month) instead of today.
+**What:** When the preview page reposts to `/preview` for a rate recompute, the
+server rebuilds the group fresh from YNAB, so any per-row choices the user made
+— unticked rows, or an Action set to "Already \<CUR\>" / "skip forever" — are
+reset to the defaults (ticked, "Convert").
 
-**Why:** `start_date` is the fetch floor — transactions dated before it are
-never pulled. Defaulting to today means a fresh conversion silently ignores
-every transaction already entered before setup, which is exactly the
-backlog a new user wants converted first. They have to notice the default
-and manually pick an earlier date to catch anything.
+**Why:** A user who unticks a row or marks it skipped, then edits a rate and
+hits Recompute, silently gets those choices back to default. Not a data bug (the
+recomputed preview is shown again for review before Approve, so nothing is
+applied unseen), but a real annoyance that can lead to re-converting a row they'd
+excluded.
 
-**Context:** Both defaults currently come from the same `today` value
-(`_form_context` → `date.today().isoformat()`), used in
-`conversion_form.html` and `batch_form.html`. This only changes the
-*prefilled* value; the field stays editable and `_validate_start_date`
-is unaffected. Pick the lookback window (fixed N days vs. start-of-month)
-when building it.
+**Context:** Found by three independent reviewers during `/review` of the
+rate-override work (2026-07-08). The recompute button posts the whole preview
+form (including `action_<id>`/`selected` fields) to `preview()`, which ignores
+them and re-renders from scratch. The fix is to thread the submitted
+action/selected state back into the re-rendered rows (or recompute client-side
+for the amount only). Deferred because doing it well is more than a couple of
+lines and the preview→approve safety net makes it low-risk.
 
-**Effort:** S
+**Effort:** M
 **Priority:** P3
 
 ## Ops / deployment
@@ -371,48 +300,6 @@ setting up the key/secret is guided-manual with David.
 **Effort:** M
 **Priority:** P3
 
-### Audit log
-
-**What:** Record security/data-relevant events (login, conversion
-created/edited/deleted, apply, YNAB connect/disconnect) with user id +
-timestamp.
-
-**Why:** For debugging and accountability as the user base grows past
-friends-and-family.
-
-**Context:** No existing infra for this; would need a new table or
-append-only log file.
-
-**Effort:** M
-**Priority:** P3
-
-### Per-user metrics
-
-**What:** Track e.g. transactions processed/converted per user,
-conversions configured, last activity.
-
-**Why:** Both for David's own insight and to power the admin view below.
-
-**Context:** No blockers; straightforward aggregation queries over
-existing tables plus whatever the audit log adds.
-
-**Effort:** M
-**Priority:** P3
-
-### Admin interface
-
-**What:** A minimal admin-only view of users and their activity/metrics.
-
-**Why:** Enough to see who's using the site and to help a user who emails
-in because they're stuck.
-
-**Context:** Needs an admin flag on the user row. Most useful once
-per-user metrics exist to show.
-
-**Effort:** M
-**Priority:** P3
-**Depends on:** Per-user metrics (for something to display)
-
 ### Switch to a real database
 
 **What:** Consider Postgres behind a thin data layer if usage grows.
@@ -434,6 +321,90 @@ only worth doing if usage actually grows past friends-and-family scale.
 ---
 
 ## Completed
+
+### Admin dashboard, per-user metrics, and an activity/audit log
+**(Ops / deployment — closes "Audit log", "Per-user metrics", "Admin interface")**
+
+Done (2026-07-08, branch `claude/todo-list-priorities-bfpdtu`): the three
+observability items shipped as one feature on a shared append-only `events`
+table — it *is* the audit log, per-user metrics are aggregations over it, and
+`/admin` renders users joined to those aggregates. `record_event` is
+best-effort (catches broad `sqlite3.Error`, logs loudly to stderr, never breaks
+the action it accompanies) and records metadata only (type, user, timestamp, an
+integer `count`, a display-only `detail`) — no tokens/amounts/memos. The
+summable `count` is its own column so "transactions converted" is `SUM(count)`
+(only apply events carry one), and `created_at` defaults to `datetime('now')`
+so the 3-way last-activity `MAX` sorts across the on-disk timestamp formats.
+`require_admin` returns 404 (not 403) for non-admins so the route isn't
+disclosed; `/admin` is GET-only; aggregates use correlated subqueries +
+`COALESCE`, never a fan-out JOIN. Admin is granted out-of-band by
+`docker compose exec app python -m app.set_admin <email>` (errors non-zero on an
+unknown email; DEPLOY.md documents it). Shaped via `/office-hours` and hardened
+through `/autoplan` (CEO + eng dual-voice review); the events-table architecture
+over a lite "two columns on users" version was the deliberate call once the
+stage was reframed from friends-and-family to real users. Tests:
+`tests/test_admin.py` (access control, aggregate fan-out + single-side cases,
+event-failure isolation, metadata-only storage, 3-way MAX, is_admin round-trip)
+and the pre-migration ALTER case in `tests/test_db.py`.
+
+**Completed:** 2026-07-08
+
+### Manual rate override in preview
+**(Features)**
+
+Done (2026-07-08): each preview row has an editable rate field plus a "Recompute
+with my rates" button. Cash exchanged off-market or a card FX fee means the
+Frankfurter rate isn't always right; editing a row's rate and re-previewing
+recomputes that row's converted amount and memo marker. Server-side recompute
+(the preview endpoint reads `rate_<id>` overrides and re-runs `build_preview`)
+so all rounding and marker formatting stay in one place and an overridden row
+still round-trips through the preview→approve contract; invalid/blank/non-positive
+rates fall back to the market rate. Test: `tests/test_rate_override.py`.
+
+**Completed:** 2026-07-08
+
+### Reject same-currency conversions
+**(Correctness & robustness)**
+
+Done (2026-07-08): create/edit return a 400 when the account's original currency
+already equals the plan's derived currency (a no-op that can only harm — no
+self-pair rate, and a 1.0 rate would rewrite amounts for nothing), alongside the
+existing direction-mismatch check. Batch-create drops such rows rather than
+failing the whole batch. Tests in `tests/test_conversion_validation.py`.
+
+**Completed:** 2026-07-08
+
+### Default the start date earlier than today
+**(UX)**
+
+Done (2026-07-08): the new/batch forms prefill `start_date` ~30 days back
+(`_DEFAULT_START_LOOKBACK_DAYS`) instead of today, so a fresh conversion catches
+the backlog entered before setup (start_date is the fetch floor). The field
+stays editable; only the prefill changed. Test in
+`tests/test_conversion_validation.py`.
+
+**Completed:** 2026-07-08
+
+### Shared test for the currency-guess heuristic (Python + JS)
+**(Correctness & robustness)**
+
+Done (2026-07-08): the account-name→currency guess is now backed by a shared
+fixture (`tests/currency_guess_cases.py`) run through BOTH the Python
+`_guess_currency` and the real JavaScript, extracted into one file
+(`app/static/currency_guess.js`) and executed via `node` in
+`tests/test_currency_guess.py`, so a future edit to one that diverges from the
+other fails the test.
+
+**Completed:** 2026-07-08
+
+### Submit the OAuth App Review form
+**(Features — OAuth App Review)**
+
+Done (2026-07): the YNAB OAuth App Review form was filed now that every
+prerequisite had landed (footer trademark disclaimer, Privacy Policy page,
+"Plan" branding, name uniqueness, OAuth-only auth).
+
+**Completed:** 2026-07
 
 ### Dashboard: preview all accounts, apply all, pending-count badges
 **(Features / UX)**

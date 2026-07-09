@@ -49,6 +49,25 @@ bind-mounted `./data` directory (Docker creates missing host dirs root-owned,
 and older deployments have root-owned files from when the app ran as root),
 then drops privileges — no manual chown needed on the host.
 
+## Granting admin (the `/admin` dashboard)
+
+`/admin` is a read-only view of users and their activity, gated by a per-user
+`is_admin` flag. There is no self-serve way to become an admin — grant it
+out-of-band, **inside the container** so it hits the live DB in the mounted
+volume:
+
+```bash
+docker compose exec app python -m app.set_admin you@example.com
+# revoke:
+docker compose exec app python -m app.set_admin you@example.com --revoke
+```
+
+Run it on the host by mistake (`python -m app.set_admin ...` without
+`docker compose exec`) and it opens a different, empty `data/app.db` and
+changes nothing — so the command errors loudly and exits non-zero on an
+unknown email rather than pretending to succeed. After granting, the account
+sees an "Admin" link on `/settings` and can open `/admin`.
+
 ## Updating
 
 Auto-deploy (below) normally handles this. To update by hand:

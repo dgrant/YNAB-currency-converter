@@ -1,6 +1,7 @@
 import asyncio
+import math
 import re
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -8,7 +9,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse
 from starlette.datastructures import FormData
 
-from .. import oauth
+from .. import events, oauth
 from ..auth import require_login
 from ..config import get_settings
 from ..connections import ConnectionStore
@@ -34,6 +35,14 @@ from ..ynab import YNABClient, YNABError
 # the YNAB budget or exhaust the single worker's threadpool. See index().
 _ONLOAD_STALE_SECONDS = 3600
 _ONLOAD_REFRESH_MAX = 2
+
+# How far back the new/batch forms prefill the start date. start_date is the
+# fetch floor (transactions before it are never pulled), so defaulting to today
+# would silently ignore the backlog a user entered before setup — exactly what
+# they want converted first. The field stays editable; this only changes the
+# prefill. Kept modest so a first preview isn't unbounded (see the cap-large-
+# previews TODO); widen the date by hand to reach further back.
+_DEFAULT_START_LOOKBACK_DAYS = 30
 
 router = APIRouter(dependencies=[Depends(require_login)])
 
@@ -233,7 +242,12 @@ def _form_context(ynab: YNABClient) -> dict:
             }
         )
     currencies = get_rates_client().currencies()
-    return {"budgets": budgets, "currencies": currencies, "today": date.today().isoformat()}
+    default_start = (date.today() - timedelta(days=_DEFAULT_START_LOOKBACK_DAYS)).isoformat()
+    return {
+        "budgets": budgets,
+        "currencies": currencies,
+        "default_start": default_start,
+    }
 
 
 def _used_account_ids(user_id: str, except_conversion_id: str | None = None) -> list[str]:
@@ -250,6 +264,19 @@ def _reject_duplicate_account(
 ) -> None:
     if account_id in _used_account_ids(user_id, except_conversion_id):
         raise HTTPException(409, "That account already has a conversion configured")
+
+
+def _reject_same_currency(from_currency: str, to_currency: str) -> None:
+    """A conversion from a currency to itself is a no-op that can only harm:
+    Frankfurter has no self-pair rate (so preview would error), and a 1.0 rate
+    would rewrite amounts and stamp memos for nothing. Reject it up front (a
+    400, like the direction-mismatch check) rather than failing later."""
+    if from_currency.upper() == to_currency.upper():
+        raise HTTPException(
+            400,
+            "That account's original currency is already the plan's currency — "
+            "there's nothing to convert.",
+        )
 
 
 def _guess_currency(account_name: str, codes: set[str]) -> str:
@@ -323,6 +350,7 @@ def create(
     _validate_start_date(start_date)
     _reject_duplicate_account(user.id, account_id)
     to_currency = _budget_currency(ynab, budget_id)
+    _reject_same_currency(from_currency, to_currency)
     try:
         conversion = get_store().add(
             user.id,
@@ -340,6 +368,9 @@ def create(
         # The pre-check above just lost a race to a concurrent request for
         # the same account — the DB's unique constraint is the real backstop.
         raise HTTPException(409, "That account already has a conversion configured") from exc
+    events.record_event(
+        get_settings().data_dir, user.id, events.CONVERSION_CREATED, detail=account_id
+    )
     return RedirectResponse(f"/conversions/{conversion['id']}", status_code=303)
 
 
@@ -373,7 +404,11 @@ def batch_form(
     return templates.TemplateResponse(
         request,
         "batch_form.html",
-        {"plans": plans, "currencies": context["currencies"], "today": context["today"]},
+        {
+            "plans": plans,
+            "currencies": context["currencies"],
+            "default_start": context["default_start"],
+        },
     )
 
 
@@ -406,6 +441,10 @@ def _create_batch(
         from_currency = str(form.get(f"from_{account_id}", "")).upper()
         if not from_currency:
             continue
+        # A currency-to-itself conversion is a no-op that can only harm; drop
+        # the row rather than fail the batch (same as the create/edit 400).
+        if from_currency == info["to_currency"].upper():
+            continue
         to_create.append(
             {
                 "budget_id": info["budget_id"],
@@ -437,6 +476,15 @@ async def batch_create(
     # tampered with (same reason to_currency is derived, not posted).
     accounts = await run_in_threadpool(_account_index, ynab)
     created = await run_in_threadpool(_create_batch, user.id, selected, form, accounts)
+    if created:
+        # run_in_threadpool: batch_create is async, and record_event does a
+        # blocking sqlite write (worse now that db.connect sets busy_timeout=5s)
+        # — keep it off the single worker's event loop, like the other DB calls.
+        await run_in_threadpool(
+            events.record_event,
+            get_settings().data_dir, user.id, events.CONVERSION_CREATED,
+            detail=f"batch:{created}",
+        )
     return RedirectResponse(f"/conversions?created={created}", status_code=303)
 
 
@@ -526,6 +574,7 @@ def edit(
     _get_conversion_or_404(user.id, conversion_id)
     _reject_duplicate_account(user.id, account_id, except_conversion_id=conversion_id)
     to_currency = _budget_currency(ynab, budget_id)
+    _reject_same_currency(from_currency, to_currency)
     try:
         get_store().update(
             user.id,
@@ -542,6 +591,9 @@ def edit(
         )
     except DuplicateAccountError as exc:
         raise HTTPException(409, "That account already has a conversion configured") from exc
+    events.record_event(
+        get_settings().data_dir, user.id, events.CONVERSION_UPDATED, detail=account_id
+    )
     return RedirectResponse(f"/conversions/{conversion_id}", status_code=303)
 
 
@@ -563,12 +615,21 @@ def bulk_delete(
     if len(ids) > _MAX_BULK_DELETE:
         raise HTTPException(400, f"Too many conversions selected (max {_MAX_BULK_DELETE})")
     get_store().delete_many(user.id, ids)
+    # detail, not count: count is reserved for the transactions-converted metric
+    # (only apply events carry it), so a delete count must not pollute that sum.
+    events.record_event(
+        get_settings().data_dir, user.id, events.CONVERSION_DELETED,
+        detail=f"bulk:{len(ids)}",
+    )
     return RedirectResponse("/conversions", status_code=303)
 
 
 @router.post("/conversions/{conversion_id}/delete")
 def delete(conversion_id: str, user: User = Depends(require_login)):
     get_store().delete(user.id, conversion_id)
+    events.record_event(
+        get_settings().data_dir, user.id, events.CONVERSION_DELETED, detail=conversion_id
+    )
     return RedirectResponse("/conversions", status_code=303)
 
 
@@ -576,12 +637,16 @@ def _utcnow_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
-def _build_group(ynab: YNABClient, conversion: dict) -> dict:
+def _build_group(
+    ynab: YNABClient, conversion: dict, overrides: dict[str, float] | None = None
+) -> dict:
     """Fetch one conversion's transactions and compute its preview rows +
-    pending count. Raises YNABError/RatesError on upstream failure — callers
-    decide whether that aborts (single preview) or fails just this group
-    (preview-all). No store writes here: the caller marks synced / sets the
-    badge only after this returns, so a failure never leaves a false 'synced'."""
+    pending count. `overrides` (txn id -> user rate) refine individual rows;
+    empty on the initial preview and on preview-all. Raises YNABError/RatesError
+    on upstream failure — callers decide whether that aborts (single preview) or
+    fails just this group (preview-all). No store writes here: the caller marks
+    synced / sets the badge only after this returns, so a failure never leaves a
+    false 'synced'."""
     transactions = ynab.get_transactions(
         conversion["budget_id"], conversion["account_id"], conversion["start_date"]
     )
@@ -605,7 +670,7 @@ def _build_group(ynab: YNABClient, conversion: dict) -> dict:
             conversion["from_currency"], conversion["to_currency"], min(dates), max(dates)
         )
         rows = build_preview(
-            pending, rates, conversion["from_currency"], conversion["to_currency"]
+            pending, rates, conversion["from_currency"], conversion["to_currency"], overrides
         )
     totals = None
     if rows:
@@ -748,20 +813,53 @@ async def _apply_updates(
     return {"applied": updated, "skipped_splits": skipped_splits, "dropped": dropped}
 
 
+_MAX_OVERRIDE_RATE = 1e9  # comfortably above any real FX rate; see below
+
+
+def _parse_rate_overrides(form: FormData) -> dict[str, float]:
+    """Per-row manual rate overrides from the preview form's `rate_<id>` fields.
+    A blank, non-numeric, non-positive, non-finite, or absurdly large value is
+    ignored (that row keeps the market rate). The upper bound matters: an
+    enormous-but-finite rate (e.g. 1e300) would otherwise overflow the Decimal
+    context in convert_milliunits and surface as a 500 instead of just being
+    dropped."""
+    overrides: dict[str, float] = {}
+    for key in form:
+        if not key.startswith("rate_"):
+            continue
+        raw = str(form.get(key, "")).strip()
+        if not raw:
+            continue
+        try:
+            rate = float(raw)
+        except ValueError:
+            continue
+        if math.isfinite(rate) and 0 < rate < _MAX_OVERRIDE_RATE:
+            overrides[key[len("rate_"):]] = rate
+    return overrides
+
+
 @router.post("/conversions/{conversion_id}/preview")
-def preview(
+async def preview(
     request: Request,
     conversion_id: str,
     user: User = Depends(require_login),
     ynab: YNABClient = Depends(require_ynab),
 ):
     conversion = _get_conversion_or_404(user.id, conversion_id)
-    group = _build_group(ynab, conversion)
+    # The initial preview (from the detail page) carries no rate fields; the
+    # "Recompute with my rates" button reposts the form with rate_<id> values.
+    overrides = _parse_rate_overrides(await request.form())
+    group = await run_in_threadpool(_build_group, ynab, conversion, overrides)
     # Only mark synced / refresh the badge once the preview actually succeeded
     # — _build_group raises before returning if the fetch or rates call failed,
     # so we never claim "synced" for a cycle that didn't complete.
-    get_store().mark_synced(user.id, conversion_id, date.today().isoformat())
-    get_store().set_pending(user.id, conversion_id, group["pending_count"], _utcnow_iso())
+    await run_in_threadpool(
+        get_store().mark_synced, user.id, conversion_id, date.today().isoformat()
+    )
+    await run_in_threadpool(
+        get_store().set_pending, user.id, conversion_id, group["pending_count"], _utcnow_iso()
+    )
     return templates.TemplateResponse(
         request,
         "preview.html",
@@ -850,6 +948,14 @@ async def apply(
     # A YNABError here (401/429/other) propagates to the global handler — same
     # routing single-preview has always had (401 -> reconnect, 429 -> its page).
     result = await _apply_updates(user.id, ynab, conversion, updates, meta)
+    # count = transactions actually converted (the one summable metric the admin
+    # dashboard reads). Only apply events carry a count. run_in_threadpool: this
+    # is an async handler and record_event does a blocking sqlite write.
+    await run_in_threadpool(
+        events.record_event,
+        get_settings().data_dir, user.id, events.APPLY,
+        count=len(result["applied"]), detail=conversion_id,
+    )
     skipped_splits = result["skipped_splits"]
     suffix = f"&skipped_splits={skipped_splits}" if skipped_splits else ""
     return RedirectResponse(
@@ -895,6 +1001,11 @@ async def apply_all(
                 {"account_name": conversion["account_name"], "error": str(exc)[:120]}
             )
             continue
+        await run_in_threadpool(
+            events.record_event,
+            get_settings().data_dir, user.id, events.APPLY,
+            count=len(result["applied"]), detail=cid,
+        )
         results.append(
             {
                 "account_name": conversion["account_name"],

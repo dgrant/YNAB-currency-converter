@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Admin &middot; Currency Converter for YNAB{% endblock %}
+{% block content %}
+<h1>Admin</h1>
+<p class="hint">
+  Read-only. &ldquo;Transactions converted&rdquo; counts only activity since
+  this dashboard launched &mdash; users who converted before then read 0 until
+  they convert again. &ldquo;Last active&rdquo; falls back to sign-up or last
+  sync, so it&rsquo;s never blank.
+</p>
+
+{% if users %}
+<table>
+  <thead>
+    <tr>
+      <th>Email</th>
+      <th>Joined</th>
+      <th class="num">Conversions</th>
+      <th class="num">Txns converted<br><span class="hint">since launch</span></th>
+      <th>Last active</th>
+      <th>Admin</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for u in users %}
+    <tr>
+      <td>{{ u.email }}</td>
+      <td>{{ u.created_at[:10] }}</td>
+      <td class="num">{{ u.conversions_count }}</td>
+      <td class="num">{{ u.transactions_converted }}</td>
+      {# last_activity is a MAX over datetime (events/signup) and date-only
+         (last_synced) values; show just the date so the column is consistent. #}
+      <td>{{ u.last_activity[:10] }}</td>
+      <td>{{ "✓" if u.is_admin else "" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No users yet.</p>
+{% endif %}
+{% endblock %}
