@@ -1,4 +1,5 @@
 import asyncio
+import math
 import re
 from datetime import UTC, date, datetime, timedelta
 
@@ -633,12 +634,16 @@ def _utcnow_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
-def _build_group(ynab: YNABClient, conversion: dict) -> dict:
+def _build_group(
+    ynab: YNABClient, conversion: dict, overrides: dict[str, float] | None = None
+) -> dict:
     """Fetch one conversion's transactions and compute its preview rows +
-    pending count. Raises YNABError/RatesError on upstream failure — callers
-    decide whether that aborts (single preview) or fails just this group
-    (preview-all). No store writes here: the caller marks synced / sets the
-    badge only after this returns, so a failure never leaves a false 'synced'."""
+    pending count. `overrides` (txn id -> user rate) refine individual rows;
+    empty on the initial preview and on preview-all. Raises YNABError/RatesError
+    on upstream failure — callers decide whether that aborts (single preview) or
+    fails just this group (preview-all). No store writes here: the caller marks
+    synced / sets the badge only after this returns, so a failure never leaves a
+    false 'synced'."""
     transactions = ynab.get_transactions(
         conversion["budget_id"], conversion["account_id"], conversion["start_date"]
     )
@@ -662,7 +667,7 @@ def _build_group(ynab: YNABClient, conversion: dict) -> dict:
             conversion["from_currency"], conversion["to_currency"], min(dates), max(dates)
         )
         rows = build_preview(
-            pending, rates, conversion["from_currency"], conversion["to_currency"]
+            pending, rates, conversion["from_currency"], conversion["to_currency"], overrides
         )
     totals = None
     if rows:
@@ -805,20 +810,47 @@ async def _apply_updates(
     return {"applied": updated, "skipped_splits": skipped_splits, "dropped": dropped}
 
 
+def _parse_rate_overrides(form: FormData) -> dict[str, float]:
+    """Per-row manual rate overrides from the preview form's `rate_<id>` fields.
+    A blank, non-numeric, or non-positive value is ignored (that row keeps the
+    market rate), so a tampered/empty field can never produce a nonsense rate."""
+    overrides: dict[str, float] = {}
+    for key in form:
+        if not key.startswith("rate_"):
+            continue
+        raw = str(form.get(key, "")).strip()
+        if not raw:
+            continue
+        try:
+            rate = float(raw)
+        except ValueError:
+            continue
+        if rate > 0 and math.isfinite(rate):
+            overrides[key[len("rate_"):]] = rate
+    return overrides
+
+
 @router.post("/conversions/{conversion_id}/preview")
-def preview(
+async def preview(
     request: Request,
     conversion_id: str,
     user: User = Depends(require_login),
     ynab: YNABClient = Depends(require_ynab),
 ):
     conversion = _get_conversion_or_404(user.id, conversion_id)
-    group = _build_group(ynab, conversion)
+    # The initial preview (from the detail page) carries no rate fields; the
+    # "Recompute with my rates" button reposts the form with rate_<id> values.
+    overrides = _parse_rate_overrides(await request.form())
+    group = await run_in_threadpool(_build_group, ynab, conversion, overrides)
     # Only mark synced / refresh the badge once the preview actually succeeded
     # — _build_group raises before returning if the fetch or rates call failed,
     # so we never claim "synced" for a cycle that didn't complete.
-    get_store().mark_synced(user.id, conversion_id, date.today().isoformat())
-    get_store().set_pending(user.id, conversion_id, group["pending_count"], _utcnow_iso())
+    await run_in_threadpool(
+        get_store().mark_synced, user.id, conversion_id, date.today().isoformat()
+    )
+    await run_in_threadpool(
+        get_store().set_pending, user.id, conversion_id, group["pending_count"], _utcnow_iso()
+    )
     return templates.TemplateResponse(
         request,
         "preview.html",

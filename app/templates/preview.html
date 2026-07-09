@@ -12,6 +12,9 @@
    action to one of the “Already {{ conversion.to_currency }}” options. Both keep the amount:
    “memo ≈…” notes the {{ conversion.from_currency }} equivalent in the memo, and
    “skip forever” adds “(skipped)” so the transaction never shows up here again.</p>
+<p class="hint">The rate is the market rate for each transaction's date. If you exchanged cash
+   at a different rate or paid an FX fee, edit the rate and press
+   <strong>Recompute with my rates</strong> to update the converted amounts before approving.</p>
 {% if skipped_splits %}
 <p class="hint">{{ skipped_splits }} split transaction{{ "s" if skipped_splits != 1 }} skipped —
    split transactions aren't supported yet; convert them manually in YNAB.</p>
@@ -60,7 +63,12 @@
         </td>
         <td class="memo">{{ row.old_memo }}</td>
         <td class="num">{{ row.original_display }}</td>
-        <td class="num fx">{{ row.rate_display }}</td>
+        <td class="num fx">
+          <input type="text" inputmode="decimal"
+                 class="rate-input{% if row.rate_overridden %} overridden{% endif %}"
+                 name="rate_{{ row.id }}" value="{{ row.rate_display }}"
+                 aria-label="Rate for {{ row.payee_name or 'transaction' }} on {{ row.date }}">
+        </td>
         <td class="num fx">{{ row.new_display }}</td>
       </tr>
       {% endfor %}
@@ -77,7 +85,11 @@
     </tfoot>
     {% endif %}
   </table>
-  <button type="submit" class="primary">Approve selected &amp; update YNAB</button>
+  <div class="preview-actions">
+    <button type="submit" class="primary">Approve selected &amp; update YNAB</button>
+    <button type="submit" class="secondary"
+            formaction="/conversions/{{ conversion.id }}/preview">Recompute with my rates</button>
+  </div>
 </form>
 <script>
   const fromCurrency = {{ conversion.from_currency | tojson }};

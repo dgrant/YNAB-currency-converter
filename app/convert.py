@@ -170,13 +170,22 @@ def build_preview(
     rates: RateTable,
     from_currency: str,
     to_currency: str,
+    overrides: dict[str, float] | None = None,
 ) -> list[dict]:
-    """Compute the proposed conversion for each not-yet-converted transaction."""
+    """Compute the proposed conversion for each not-yet-converted transaction.
+
+    `overrides` maps a transaction id to a user-supplied rate (cash exchanged at
+    a non-market rate, card FX fees, etc.); when present for a row, it replaces
+    the market rate for that row's amount and memo marker. Everything else
+    (rounding, marker format) is unchanged, so an overridden row still round-
+    trips through the same preview->approve contract."""
+    overrides = overrides or {}
     rows = []
     for txn in transactions:
         if not is_convertible(txn):
             continue
-        rate = rates.rate_for(date.fromisoformat(txn["date"]))
+        override = overrides.get(txn["id"])
+        rate = override if override is not None else rates.rate_for(date.fromisoformat(txn["date"]))
         new_milliunits = convert_milliunits(txn["amount"], rate, to_currency)
         # For the "already in budget currency" action: the amount stays as-is,
         # so its original-currency equivalent goes in the memo instead.
@@ -191,6 +200,7 @@ def build_preview(
                 "original_display": format_original(txn["amount"], from_currency),
                 "rate": rate,
                 "rate_display": format_rate(rate),
+                "rate_overridden": override is not None,
                 "new_milliunits": new_milliunits,
                 "new_display": format_amount(new_milliunits, to_currency),
                 "new_memo": build_memo(txn.get("memo"), txn["amount"], from_currency, rate),
