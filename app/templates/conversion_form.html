@@ -147,7 +147,7 @@
       if (categorySelect.value !== conversion.default_category_id) {
         const gone = new Option(
           "⚠ " + (conversion.default_category_name || "previous category") +
-          " — removed in YNAB, will clear on save", "");
+          " — removed or hidden in YNAB, will clear on save", "");
         categorySelect.add(gone, categorySelect.options[1] || null);
         categorySelect.value = "";
         gone.selected = true;
