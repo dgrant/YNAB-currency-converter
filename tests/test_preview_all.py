@@ -98,6 +98,29 @@ def test_preview_all_all_splits_group_shows_caught_up(app_client):
 
 
 @respx.mock
+def test_preview_all_transaction_table_is_sortable(app_client):
+    """The grouped preview's transaction tables carry the client-side sort
+    wiring (see app/static/sortable.js): the `sortable` class, clickable
+    per-column headers, the raw numeric sort values on the amount cells, and
+    the script include. The reorder itself is JS, exercised in a browser."""
+    mock_budgets()
+    _mock_rates()
+    _mock_txns("a1", [_txn("t1")])
+    token = login(app_client)
+    create_conversion(app_client, token, "a1", "Japan Trip")
+
+    r = app_client.post("/conversions/preview-all", data={"csrf_token": token})
+    assert r.status_code == 200
+    assert "group-table sortable" in r.text
+    assert 'data-sort="date"' in r.text
+    assert 'data-sort="payee"' in r.text
+    assert 'data-sort="original"' in r.text
+    assert 'data-sort="converted"' in r.text
+    assert 'data-sort-value="-1817000"' in r.text  # raw milliunits, not "-1,817"
+    assert "/static/sortable.js" in r.text
+
+
+@respx.mock
 def test_preview_all_one_group_rate_outage_isolated(app_client):
     """A RatesError on one conversion fails just that group; the other renders."""
     mock_budgets()

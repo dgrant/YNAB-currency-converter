@@ -32,6 +32,29 @@ def _market_rate():
 
 
 @respx.mock
+def test_preview_transaction_table_is_sortable(app_client):
+    """The single-account preview table carries the client-side sort wiring
+    (see app/static/sortable.js): the `sortable` class, clickable per-column
+    headers, the raw numeric sort value on the amount cell, and the script
+    include. The reorder itself is JS, exercised in a browser."""
+    mock_budgets()
+    _one_txn()
+    _market_rate()
+    token = login(app_client)
+    cid = create_conversion(app_client, token, "a1", "Japan Trip")
+
+    r = app_client.post(f"/conversions/{cid}/preview", data={"csrf_token": token})
+    assert r.status_code == 200
+    assert 'class="sortable"' in r.text
+    assert 'data-sort="date"' in r.text
+    assert 'data-sort="payee"' in r.text
+    assert 'data-sort="original"' in r.text
+    assert 'data-sort="converted"' in r.text
+    assert 'data-sort-value="-1817000"' in r.text  # raw milliunits, not "-1,817"
+    assert "/static/sortable.js" in r.text
+
+
+@respx.mock
 def test_preview_applies_manual_rate_override(app_client):
     mock_budgets()
     _one_txn()

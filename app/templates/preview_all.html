@@ -39,20 +39,20 @@
     <p class="hint">{{ group.skipped_splits }} split transaction{{ "s" if group.skipped_splits != 1 }} skipped —
        convert them manually in YNAB.</p>
     {% endif %}
-    <table class="group-table"
+    <table class="group-table sortable"
            data-from="{{ c.from_currency }}" data-to="{{ c.to_currency }}"
            data-from-digits="{{ group.from_digits }}" data-to-digits="{{ group.to_digits }}">
       <thead>
         <tr>
           <th><input type="checkbox" class="group-check" checked
                      aria-label="Select all for {{ c.account_name }}"></th>
-          <th>Date</th>
-          <th>Payee</th>
+          <th data-sort="date" data-sort-type="text"><button type="button" class="sort">Date <span class="arrow"></span></button></th>
+          <th data-sort="payee" data-sort-type="text"><button type="button" class="sort">Payee <span class="arrow"></span></button></th>
           <th>Action</th>
           <th class="memo">Memo</th>
-          <th class="num">Original ({{ c.from_currency }})</th>
-          <th class="num">Rate</th>
-          <th class="num">Converted ({{ c.to_currency }})</th>
+          <th class="num" data-sort="original" data-sort-type="number"><button type="button" class="sort">Original ({{ c.from_currency }}) <span class="arrow"></span></button></th>
+          <th class="num" data-sort="rate" data-sort-type="number"><button type="button" class="sort">Rate <span class="arrow"></span></button></th>
+          <th class="num" data-sort="converted" data-sort-type="number"><button type="button" class="sort">Converted ({{ c.to_currency }}) <span class="arrow"></span></button></th>
         </tr>
       </thead>
       <tbody>
@@ -77,14 +77,14 @@
             </select>
           </td>
           <td class="memo">{{ row.old_memo }}</td>
-          <td class="num">{{ row.original_display }}</td>
+          <td class="num" data-sort-value="{{ row.original_milliunits }}">{{ row.original_display }}</td>
           <td class="num fx">
             <input type="text" inputmode="decimal"
                    class="rate-input{% if row.rate_overridden %} overridden{% endif %}"
                    name="rate_{{ row.id }}" value="{{ row.rate_display }}"
                    aria-label="Rate for {{ row.payee_name or 'transaction' }} on {{ row.date }}">
           </td>
-          <td class="num fx">{{ row.new_display }}</td>
+          <td class="num fx" data-sort-value="{{ row.new_milliunits }}">{{ row.new_display }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -193,4 +193,5 @@
     });
   }
 </script>
+<script src="/static/sortable.js?v={{ build_id()[:12] }}"></script>
 {% endblock %}
