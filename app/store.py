@@ -34,11 +34,29 @@ _FIELDS = (
 # add()/update(). Kept out of _FIELDS so a form write can't clobber them.
 _MANAGED = ("last_synced", "pending_count", "pending_checked_at")
 
+# Optional per-account settings written by add()/add_many()/update() but NOT
+# required in the conversion dict (batch-create and legacy call sites don't set
+# them), so they're kept out of _FIELDS to avoid a KeyError and defaulted in
+# _config_value(). They must be read back through _row_to_dict too — projecting
+# only _FIELDS would leave the feature invisible even though the columns exist.
+_CONFIG = ("default_category_id", "default_category_name", "approve_on_apply")
+
+# Columns and per-column defaults for a _CONFIG field absent from the dict.
+_CONFIG_DEFAULTS = {"approve_on_apply": 0}
+
+
+def _config_value(conversion: dict, field: str):
+    value = conversion.get(field)
+    if value is None:
+        return _CONFIG_DEFAULTS.get(field)
+    return value
+
 
 def _row_to_dict(row) -> dict:
     return {
         **{key: row[key] for key in ("id", *_FIELDS)},
         **{key: row[key] for key in _MANAGED},
+        **{key: row[key] for key in _CONFIG},
     }
 
 
@@ -73,12 +91,18 @@ class ConversionStore:
         """Raises DuplicateAccountError if (user_id, account_id) already
         exists — the DB-level backstop behind the caller's own pre-check."""
         conversion = {"id": uuid.uuid4().hex[:8], **conversion}
+        columns = (*_FIELDS, *_CONFIG)
         conn = db.connect(self.data_dir)
         try:
             conn.execute(
-                f"INSERT INTO conversions (id, user_id, {', '.join(_FIELDS)}) "
-                f"VALUES (?, ?, {', '.join('?' * len(_FIELDS))})",
-                (conversion["id"], user_id, *(conversion[f] for f in _FIELDS)),
+                f"INSERT INTO conversions (id, user_id, {', '.join(columns)}) "
+                f"VALUES (?, ?, {', '.join('?' * len(columns))})",
+                (
+                    conversion["id"],
+                    user_id,
+                    *(conversion[f] for f in _FIELDS),
+                    *(_config_value(conversion, f) for f in _CONFIG),
+                ),
             )
             conn.commit()
         except sqlite3.IntegrityError as exc:
@@ -102,12 +126,21 @@ class ConversionStore:
         if not conversions:
             return []
         prepared = [{"id": uuid.uuid4().hex[:8], **c} for c in conversions]
+        columns = (*_FIELDS, *_CONFIG)
         conn = db.connect(self.data_dir)
         try:
             conn.executemany(
-                f"INSERT INTO conversions (id, user_id, {', '.join(_FIELDS)}) "
-                f"VALUES (?, ?, {', '.join('?' * len(_FIELDS))})",
-                [(c["id"], user_id, *(c[f] for f in _FIELDS)) for c in prepared],
+                f"INSERT INTO conversions (id, user_id, {', '.join(columns)}) "
+                f"VALUES (?, ?, {', '.join('?' * len(columns))})",
+                [
+                    (
+                        c["id"],
+                        user_id,
+                        *(c[f] for f in _FIELDS),
+                        *(_config_value(c, f) for f in _CONFIG),
+                    )
+                    for c in prepared
+                ],
             )
             conn.commit()
             return prepared
@@ -133,12 +166,18 @@ class ConversionStore:
         if existing is None:
             return None
         updated = {**existing, **fields, "id": conversion_id}
+        columns = (*_FIELDS, *_CONFIG)
         conn = db.connect(self.data_dir)
         try:
             conn.execute(
-                f"UPDATE conversions SET {', '.join(f'{f} = ?' for f in _FIELDS)} "
+                f"UPDATE conversions SET {', '.join(f'{f} = ?' for f in columns)} "
                 "WHERE user_id = ? AND id = ?",
-                (*(updated[f] for f in _FIELDS), user_id, conversion_id),
+                (
+                    *(updated[f] for f in _FIELDS),
+                    *(_config_value(updated, f) for f in _CONFIG),
+                    user_id,
+                    conversion_id,
+                ),
             )
             conn.commit()
         except sqlite3.IntegrityError as exc:

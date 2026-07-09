@@ -80,6 +80,30 @@ def mock_budgets(iso_code="USD"):
     )
 
 
+def mock_categories(budget_id="b1", groups=None):
+    """The conversion form fetches categories per budget (for the default-category
+    picker), so any test that renders new/edit/batch needs this mocked alongside
+    the accounts mock. Default groups include a couple of selectable categories
+    plus a hidden one and YNAB's internal-master group, so filtering is exercised."""
+    if groups is None:
+        groups = [
+            {"id": "cg1", "name": "Everyday", "deleted": False, "hidden": False,
+             "categories": [
+                 {"id": "cat1", "name": "Groceries", "deleted": False, "hidden": False},
+                 {"id": "cat2", "name": "2026 Japan Vacation", "deleted": False, "hidden": False},
+                 {"id": "cat_hidden", "name": "Old", "deleted": False, "hidden": True},
+             ]},
+            {"id": "cg_master", "name": "Internal Master Category", "deleted": False,
+             "hidden": False, "categories": [
+                 {"id": "rta", "name": "Inflow: Ready to Assign",
+                  "deleted": False, "hidden": False},
+             ]},
+        ]
+    return respx.get(f"{YNAB}/budgets/{budget_id}/categories").mock(
+        return_value=Response(200, json={"data": {"category_groups": groups}})
+    )
+
+
 def mock_two_budgets():
     return respx.get(f"{YNAB}/budgets").mock(
         return_value=Response(200, json={"data": {"budgets": [
@@ -827,6 +851,7 @@ def test_edit_conversion(app_client):
             {"id": "a2", "name": "Europe Trip", "deleted": False, "closed": False},
         ]}})
     )
+    mock_categories()
     respx.get(f"{FX}/currencies").mock(
         return_value=Response(200, json={"JPY": "Japanese Yen", "EUR": "Euro", "USD": "US Dollar"})
     )
@@ -978,6 +1003,7 @@ def test_batch_create_conversions(app_client):
             {"id": "a3", "name": "Rainy Day", "deleted": False, "closed": False},
         ]}})
     )
+    mock_categories()
     respx.get(f"{FX}/currencies").mock(return_value=Response(200, json={
         "JPY": "Japanese Yen", "EUR": "Euro", "USD": "US Dollar"}))
     token = login(app_client)
@@ -1160,6 +1186,8 @@ def test_batch_form_hides_plan_with_no_currency(app_client):
             {"id": "a2", "name": "Mystery", "deleted": False, "closed": False},
         ]}})
     )
+    mock_categories("b1")
+    mock_categories("b2")
     respx.get(f"{FX}/currencies").mock(return_value=Response(200, json={
         "JPY": "Japanese Yen", "USD": "US Dollar"}))
     login(app_client)

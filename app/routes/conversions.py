@@ -226,8 +226,18 @@ def _plan_currency(budget: dict) -> str:
     return (budget.get("currency_format") or {}).get("iso_code", "")
 
 
+def _budget_categories(ynab: YNABClient, budget_id: str) -> list[dict]:
+    """Category groups for a budget, or [] if the fetch fails. Categories are an
+    optional convenience on the form, so a YNAB hiccup here disables the picker
+    (with a note in the template) rather than 500ing the whole form."""
+    try:
+        return ynab.get_categories(budget_id)
+    except YNABError:
+        return []
+
+
 def _form_context(ynab: YNABClient) -> dict:
-    """Budgets/accounts/currencies needed by the new & edit conversion forms."""
+    """Budgets/accounts/currencies/categories needed by the new & edit forms."""
     budgets = []
     for budget in ynab.get_budgets():
         budgets.append(
@@ -239,6 +249,7 @@ def _form_context(ynab: YNABClient) -> dict:
                     {"id": a["id"], "name": a["name"]}
                     for a in ynab.get_accounts(budget["id"])
                 ],
+                "categories": _budget_categories(ynab, budget["id"]),
             }
         )
     currencies = get_rates_client().currencies()
@@ -319,6 +330,23 @@ def _budget_currency(ynab: YNABClient, budget_id: str) -> str:
     return currency
 
 
+def _resolve_default_category(
+    ynab: YNABClient, budget_id: str, category_id: str
+) -> tuple[str | None, str | None]:
+    """Validate a posted default category against the budget and return
+    (id, canonical_name), or (None, None) when none was chosen. Rejecting an id
+    that isn't a current category of this budget (400) keeps a wrong-budget or
+    tampered value from being stored — where it would fail every later apply.
+    The name is taken from YNAB, not the form, so it can't drift from the id."""
+    if not category_id:
+        return None, None
+    for group in ynab.get_categories(budget_id):
+        for category in group["categories"]:
+            if category["id"] == category_id:
+                return category_id, category["name"]
+    raise HTTPException(400, "That category isn't in the selected plan")
+
+
 @router.get("/conversions/new")
 def new_form(
     request: Request,
@@ -346,11 +374,14 @@ def create(
     account_name: str = Form(...),
     from_currency: str = Form(...),
     start_date: str = Form(...),
+    default_category_id: str = Form(""),
+    approve_on_apply: str | None = Form(None),
 ):
     _validate_start_date(start_date)
     _reject_duplicate_account(user.id, account_id)
     to_currency = _budget_currency(ynab, budget_id)
     _reject_same_currency(from_currency, to_currency)
+    category_id, category_name = _resolve_default_category(ynab, budget_id, default_category_id)
     try:
         conversion = get_store().add(
             user.id,
@@ -362,6 +393,9 @@ def create(
                 "from_currency": from_currency.upper(),
                 "to_currency": to_currency,
                 "start_date": start_date,
+                "default_category_id": category_id,
+                "default_category_name": category_name,
+                "approve_on_apply": 1 if approve_on_apply is not None else 0,
             },
         )
     except DuplicateAccountError as exc:
@@ -530,12 +564,22 @@ def detail(
     user: User = Depends(require_login),
     applied: int | None = None,
     skipped_splits: int = 0,
+    categorized: int = 0,
+    dropped_categories: int = 0,
+    approved: int = 0,
 ):
     conversion = _get_conversion_or_404(user.id, conversion_id)
     return templates.TemplateResponse(
         request,
         "detail.html",
-        {"conversion": conversion, "applied": applied, "skipped_splits": skipped_splits},
+        {
+            "conversion": conversion,
+            "applied": applied,
+            "skipped_splits": skipped_splits,
+            "categorized": categorized,
+            "dropped_categories": dropped_categories,
+            "approved": approved,
+        },
     )
 
 
@@ -569,12 +613,15 @@ def edit(
     account_name: str = Form(...),
     from_currency: str = Form(...),
     start_date: str = Form(...),
+    default_category_id: str = Form(""),
+    approve_on_apply: str | None = Form(None),
 ):
     _validate_start_date(start_date)
     _get_conversion_or_404(user.id, conversion_id)
     _reject_duplicate_account(user.id, account_id, except_conversion_id=conversion_id)
     to_currency = _budget_currency(ynab, budget_id)
     _reject_same_currency(from_currency, to_currency)
+    category_id, category_name = _resolve_default_category(ynab, budget_id, default_category_id)
     try:
         get_store().update(
             user.id,
@@ -587,6 +634,9 @@ def edit(
                 "from_currency": from_currency.upper(),
                 "to_currency": to_currency,
                 "start_date": start_date,
+                "default_category_id": category_id,
+                "default_category_name": category_name,
+                "approve_on_apply": 1 if approve_on_apply is not None else 0,
             },
         )
     except DuplicateAccountError as exc:
@@ -698,11 +748,30 @@ def _build_group(
     }
 
 
-def _parse_updates(form: FormData, txn_ids: list[str]) -> tuple[list[dict], dict]:
+# Actions that rewrite the amount (so the write-time re-check compares the
+# current amount against the pre-preview one). "convert_nocat" is a convert that
+# skips categorizing (the per-row opt-out), so it belongs here too.
+_CONVERT_ACTIONS = ("convert", "convert_nocat")
+
+
+def _parse_updates(
+    form: FormData,
+    txn_ids: list[str],
+    approved: bool = False,
+    default_category_id: str | None = None,
+) -> tuple[list[dict], dict]:
     """Turn the preview form's per-row hidden fields into YNAB update dicts +
     the metadata (action, pre-preview amount) the write-time re-checks need.
     Raises KeyError/ValueError on a malformed/tampered form (caught by callers
-    as a 400 / per-group error). Shared by single apply and apply-all."""
+    as a 400 / per-group error). Shared by single apply and apply-all.
+
+    `approved` (the apply-wide checkbox) attaches YNAB's `approved: true` to
+    every touched row; when off the field is OMITTED entirely (never sent as
+    `false`, which would un-approve an already-approved pile on a re-run).
+    `default_category_id` is the account's default, attached to "convert" rows
+    only — "convert_nocat" is the per-row opt-out, and memo-only rows
+    (already/skip, often transfers) never take a category. Transfers/stale
+    categories are dropped later in _apply_updates against a fresh fetch."""
     updates: list[dict] = []
     meta: dict[str, dict] = {}
     for txn_id in txn_ids:
@@ -710,30 +779,52 @@ def _parse_updates(form: FormData, txn_ids: list[str]) -> tuple[list[dict], dict
         # (the one action that rewrites the amount) — KeyError -> 400.
         action = str(form[f"action_{txn_id}"])
         original = int(str(form[f"original_{txn_id}"]))
-        if action == "convert":
-            updates.append(
-                {
-                    "id": txn_id,
-                    "amount": int(str(form[f"amount_{txn_id}"])),
-                    "memo": _memo_from_form(form[f"memo_{txn_id}"]),
-                }
-            )
+        if action in _CONVERT_ACTIONS:
+            update = {
+                "id": txn_id,
+                "amount": int(str(form[f"amount_{txn_id}"])),
+                "memo": _memo_from_form(form[f"memo_{txn_id}"]),
+            }
+            if action == "convert" and default_category_id:
+                update["category_id"] = default_category_id
         elif action == "already":
-            updates.append(
-                {"id": txn_id, "memo": _memo_from_form(form[f"already_memo_{txn_id}"])}
-            )
+            update = {"id": txn_id, "memo": _memo_from_form(form[f"already_memo_{txn_id}"])}
         elif action == "skip":
-            updates.append(
-                {"id": txn_id, "memo": _memo_from_form(form[f"skip_memo_{txn_id}"])}
-            )
+            update = {"id": txn_id, "memo": _memo_from_form(form[f"skip_memo_{txn_id}"])}
         else:
             raise ValueError(f"unknown action {action!r}")
+        if approved:
+            update["approved"] = True
+        updates.append(update)
         meta[txn_id] = {"action": action, "original": original}
     return updates, meta
 
 
+async def _valid_category_ids(
+    ynab: YNABClient, budget_id: str, cache: dict[str, set[str] | None] | None
+) -> set[str] | None:
+    """The budget's live category ids for apply-time validation, or None when
+    they can't be fetched (caller then keeps categories and drops only transfers
+    — best-effort, so a categories-endpoint hiccup never fails the convert).
+    Memoized in `cache` (per apply-all run) so one budget is fetched once."""
+    if cache is not None and budget_id in cache:
+        return cache[budget_id]
+    try:
+        valid: set[str] | None = await run_in_threadpool(ynab.category_ids, budget_id)
+    except YNABError:
+        valid = None
+    if cache is not None:
+        cache[budget_id] = valid
+    return valid
+
+
 async def _apply_updates(
-    user_id: str, ynab: YNABClient, conversion: dict, updates: list[dict], meta: dict
+    user_id: str,
+    ynab: YNABClient,
+    conversion: dict,
+    updates: list[dict],
+    meta: dict,
+    category_ids_cache: dict[str, set[str] | None] | None = None,
 ) -> dict:
     """Locked fetch -> re-check -> PATCH for ONE conversion, then advance its
     last_synced / badge / start_date. The re-checks (present/split/stale/edited)
@@ -741,12 +832,23 @@ async def _apply_updates(
     present_ids union, so a txn posted under the wrong group can't validate.
     Returns {applied, skipped_splits, dropped}. Raises YNABError on a failed
     fetch/PATCH — the caller decides (single apply re-raises to the handler;
-    apply-all treats non-401/429 as a per-group failure)."""
+    apply-all treats non-401/429 as a per-group failure).
+
+    `category_ids_cache` (budget_id -> valid ids, or None if that budget's
+    categories couldn't be fetched) lets apply-all fetch each budget's category
+    list once instead of per group. Single apply passes None (fetch fresh)."""
     conversion_id = conversion["id"]
     updated: list[dict] = []
     skipped_splits = 0
     if not updates:
-        return {"applied": [], "skipped_splits": 0, "dropped": 0}
+        return {
+            "applied": [],
+            "skipped_splits": 0,
+            "dropped": 0,
+            "categorized": 0,
+            "approved": 0,
+            "dropped_categories": 0,
+        }
     async with _apply_lock(conversion_id):
         # Re-read start_date under the lock; a concurrent apply may have just
         # advanced it, and comparing against a pre-lock snapshot could regress
@@ -768,7 +870,7 @@ async def _apply_updates(
             tid
             for tid, m in meta.items()
             if tid in current_by_id
-            and m["action"] in ("convert", "already")
+            and m["action"] in (*_CONVERT_ACTIONS, "already")
             and current_by_id[tid]["amount"] != m["original"]
         }
         safe = [
@@ -780,6 +882,31 @@ async def _apply_updates(
             and u["id"] not in edited_ids
         ]
         skipped_splits = sum(1 for u in updates if u["id"] in split_ids)
+        # Drop a category_id that YNAB's bulk PATCH would reject and thereby fail
+        # the WHOLE batch: transfers (which can't be categorized) and a default
+        # archived/deleted since it was set. The transfer check is free (from the
+        # re-fetch); validating against the live category list needs one more GET,
+        # made only when a category is actually in play (so an apply without the
+        # feature costs nothing) and treated as BEST-EFFORT: if that GET fails,
+        # keep the category (still drop transfers) rather than lose the whole
+        # convert to a categories-endpoint hiccup — the feature must never become
+        # a hard dependency of the core conversion.
+        dropped_categories = 0
+        if any("category_id" in u for u in safe):
+            valid_category_ids = await _valid_category_ids(
+                ynab, conversion["budget_id"], category_ids_cache
+            )
+            for u in safe:
+                category_id = u.get("category_id")
+                if category_id is None:
+                    continue
+                current_txn = current_by_id.get(u["id"], {})
+                stale = valid_category_ids is not None and category_id not in valid_category_ids
+                if current_txn.get("transfer_account_id") or stale:
+                    del u["category_id"]
+                    dropped_categories += 1
+        categorized = sum(1 for u in safe if "category_id" in u)
+        approved = sum(1 for u in safe if u.get("approved"))
         if safe:
             updated = await run_in_threadpool(
                 ynab.update_transactions, conversion["budget_id"], safe
@@ -810,7 +937,17 @@ async def _apply_updates(
                     get_store().set_start_date, user_id, conversion_id, new_start
                 )
     dropped = len(updates) - len(updated)
-    return {"applied": updated, "skipped_splits": skipped_splits, "dropped": dropped}
+    return {
+        "applied": updated,
+        "skipped_splits": skipped_splits,
+        "dropped": dropped,
+        # These describe what actually went out in the successful PATCH: how many
+        # rows carried a category, how many were approved, and how many had their
+        # category dropped (transfer / stale). Only meaningful when `updated`.
+        "categorized": categorized if updated else 0,
+        "approved": approved if updated else 0,
+        "dropped_categories": dropped_categories,
+    }
 
 
 _MAX_OVERRIDE_RATE = 1e9  # comfortably above any real FX rate; see below
@@ -950,8 +1087,18 @@ async def apply(
 ):
     conversion = _get_conversion_or_404(user.id, conversion_id)
     form = await request.form()
+    approved = form.get("approve") is not None
     try:
-        updates, meta = _parse_updates(form, [str(t) for t in form.getlist("selected")])
+        updates, meta = _parse_updates(
+            form,
+            [str(t) for t in form.getlist("selected")],
+            approved=approved,
+            # Read the category from the hidden field the preview rendered, not
+            # live from the DB — apply writes exactly what the preview showed
+            # (the stateless preview->approve contract), even if the config
+            # changed since. Still validated/dropped against a fresh fetch.
+            default_category_id=str(form.get("default_category_id") or "") or None,
+        )
     except (KeyError, ValueError) as exc:
         raise HTTPException(
             400, "Malformed apply form — go back and run the preview again"
@@ -967,10 +1114,16 @@ async def apply(
         get_settings().data_dir, user.id, events.APPLY,
         count=len(result["applied"]), detail=conversion_id,
     )
-    skipped_splits = result["skipped_splits"]
-    suffix = f"&skipped_splits={skipped_splits}" if skipped_splits else ""
+    # Carry the category/approve outcome so detail.html can confirm it — the
+    # whole point is that the user doesn't have to re-open YNAB to check. Only
+    # non-zero counts are appended, so an apply that used neither feature keeps
+    # the plain "?applied=N" URL.
+    params = [f"applied={len(result['applied'])}"]
+    for name in ("skipped_splits", "categorized", "dropped_categories", "approved"):
+        if result[name]:
+            params.append(f"{name}={result[name]}")
     return RedirectResponse(
-        f"/conversions/{conversion_id}?applied={len(result['applied'])}{suffix}",
+        f"/conversions/{conversion_id}?{'&'.join(params)}",
         status_code=303,
     )
 
@@ -990,18 +1143,34 @@ async def apply_all(
     form = await request.form()
     conversion_ids = [str(c) for c in form.getlist("conversion_ids")]
     results = []
+    # Fetch each budget's category list at most once across the whole run (many
+    # accounts often share one budget) instead of per group — keeps apply-all
+    # from tripling YNAB calls when every account has a default category.
+    category_ids_cache: dict[str, set[str] | None] = {}
     for cid in conversion_ids:
         conversion = get_store().get(user.id, cid)
         if conversion is None:
             continue  # not owned by this user, or deleted since the preview
         selected = [str(t) for t in form.getlist(f"selected_{cid}")]
+        # Each group carries its own approve checkbox (approve_<cid>), seeded
+        # from that account's approve_on_apply, and its own category snapshot
+        # (hidden default_category_id_<cid> from the preview) — one global
+        # control would contradict per-account config and break the contract.
+        approved = form.get(f"approve_{cid}") is not None
         try:
-            updates, meta = _parse_updates(form, selected)
+            updates, meta = _parse_updates(
+                form,
+                selected,
+                approved=approved,
+                default_category_id=str(form.get(f"default_category_id_{cid}") or "") or None,
+            )
         except (KeyError, ValueError):
             results.append({"account_name": conversion["account_name"], "error": "malformed form"})
             continue
         try:
-            result = await _apply_updates(user.id, ynab, conversion, updates, meta)
+            result = await _apply_updates(
+                user.id, ynab, conversion, updates, meta, category_ids_cache
+            )
         except YNABError as exc:
             if exc.status_code in (401, 429):
                 raise
@@ -1023,6 +1192,9 @@ async def apply_all(
                 "applied": len(result["applied"]),
                 "dropped": result["dropped"],
                 "skipped_splits": result["skipped_splits"],
+                "categorized": result["categorized"],
+                "approved": result["approved"],
+                "dropped_categories": result["dropped_categories"],
                 "error": None,
             }
         )

@@ -135,6 +135,51 @@ def test_init_dedupes_pre_existing_duplicate_accounts_then_enforces_uniqueness(t
     db.init(tmp_path)  # idempotent: re-running must not error
 
 
+# Schema predating the default-category / approve-on-apply columns — a live
+# production DB before the bulk category+approve feature shipped.
+_SCHEMA_BEFORE_CATEGORY = """
+CREATE TABLE users (
+    id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    refresh_on_load INTEGER NOT NULL DEFAULT 0, is_admin INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE conversions (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, budget_id TEXT NOT NULL,
+    budget_name TEXT NOT NULL, account_id TEXT NOT NULL, account_name TEXT NOT NULL,
+    from_currency TEXT NOT NULL, to_currency TEXT NOT NULL, start_date TEXT NOT NULL,
+    last_synced TEXT, pending_count INTEGER, pending_checked_at TEXT
+);
+INSERT INTO conversions VALUES
+    ('c1', 'u1', 'b1', 'My Budget', 'a1', 'Japan Trip', 'JPY', 'USD', '2024-01-01',
+     NULL, NULL, NULL);
+"""
+
+
+def test_init_migrates_category_and_approve_columns(tmp_path):
+    """The bulk category+approve feature adds conversions.default_category_id,
+    default_category_name, and approve_on_apply. A fresh tmp DB ships them via
+    CREATE TABLE and never exercises the ALTER, so pin against a pre-feature DB."""
+    conn = sqlite3.connect(db.db_path(tmp_path))
+    conn.executescript(_SCHEMA_BEFORE_CATEGORY)
+    conn.commit()
+    conn.close()
+
+    db.init(tmp_path)  # must ALTER all three columns in
+
+    conn = db.connect(tmp_path)
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(conversions)")}
+    assert {"default_category_id", "default_category_name", "approve_on_apply"} <= cols
+    # the pre-existing row survives; category defaults to NULL, approve to 0 (opt-in)
+    row = conn.execute("SELECT * FROM conversions WHERE id = 'c1'").fetchone()
+    assert row["account_name"] == "Japan Trip"
+    assert row["default_category_id"] is None
+    assert row["default_category_name"] is None
+    assert row["approve_on_apply"] == 0
+    conn.close()
+
+    db.init(tmp_path)  # idempotent
+
+
 # Schema predating the admin work: no users.is_admin column, no events table —
 # a live production DB before the admin dashboard shipped.
 _SCHEMA_BEFORE_ADMIN = """

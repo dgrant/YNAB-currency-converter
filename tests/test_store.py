@@ -177,6 +177,51 @@ def test_add_many_falls_back_and_skips_a_db_level_collision(tmp_path):
     assert {c["account_id"] for c in store.load(user.id)} == {"a1", "a2", "a3"}
 
 
+def test_config_fields_roundtrip(tmp_path):
+    """default_category_id/name and approve_on_apply must persist AND read back.
+    (Guards the store-projection gap: columns that exist but aren't selected by
+    _row_to_dict would make the whole feature silently no-op.)"""
+    user = make_user(tmp_path)
+    store = ConversionStore(tmp_path)
+    conversion = store.add(user.id, {
+        **CONVERSION,
+        "default_category_id": "cat2",
+        "default_category_name": "2026 Japan Vacation",
+        "approve_on_apply": 1,
+    })
+    got = ConversionStore(tmp_path).get(user.id, conversion["id"])
+    assert got["default_category_id"] == "cat2"
+    assert got["default_category_name"] == "2026 Japan Vacation"
+    assert got["approve_on_apply"] == 1
+
+    # update can change and also clear them
+    store.update(user.id, conversion["id"], {
+        "default_category_id": None, "default_category_name": None, "approve_on_apply": 0,
+    })
+    got = store.get(user.id, conversion["id"])
+    assert got["default_category_id"] is None
+    assert got["approve_on_apply"] == 0
+
+
+def test_config_fields_default_when_absent(tmp_path):
+    """A conversion created without the config keys (batch-create, legacy call
+    sites) must not KeyError, and the columns default to NULL / 0 (opt-in)."""
+    user = make_user(tmp_path)
+    store = ConversionStore(tmp_path)
+    conversion = store.add(user.id, CONVERSION)  # no config keys
+    got = store.get(user.id, conversion["id"])
+    assert got["default_category_id"] is None
+    assert got["default_category_name"] is None
+    assert got["approve_on_apply"] == 0
+
+    # add_many path (batch-create) likewise defaults without KeyError
+    batch = store.add_many(user.id, [
+        {**CONVERSION, "account_id": "a2", "account_name": "Trip 2"},
+    ])
+    got2 = store.get(user.id, batch[0]["id"])
+    assert got2["default_category_id"] is None and got2["approve_on_apply"] == 0
+
+
 def test_scoping_between_users(tmp_path):
     alice = make_user(tmp_path, "alice@example.com")
     bob = make_user(tmp_path, "bob@example.com")

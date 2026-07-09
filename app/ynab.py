@@ -65,6 +65,34 @@ class YNABClient:
         accounts = self._get(f"/budgets/{budget_id}/accounts")["accounts"]
         return [a for a in accounts if not a["deleted"] and not a["closed"]]
 
+    def get_categories(self, budget_id: str) -> list[dict]:
+        """Selectable spending categories, grouped for an <optgroup> dropdown.
+        Filters out deleted/hidden groups and categories, plus YNAB's "Internal
+        Master Category" group (Inflow: Ready to Assign, Uncategorized) — those
+        aren't real spending targets and setting them as a default is a footgun.
+        Returns [{"name": group_name, "categories": [{"id", "name"}, ...]}, ...]
+        (only groups that still have at least one selectable category)."""
+        groups = self._get(f"/budgets/{budget_id}/categories")["category_groups"]
+        result = []
+        for group in groups:
+            if group["deleted"] or group["hidden"] or group["name"] == "Internal Master Category":
+                continue
+            categories = [
+                {"id": c["id"], "name": c["name"]}
+                for c in group["categories"]
+                if not c["deleted"] and not c["hidden"]
+            ]
+            if categories:
+                result.append({"name": group["name"], "categories": categories})
+        return result
+
+    def category_ids(self, budget_id: str) -> set[str]:
+        """Flat set of currently-selectable category ids for this budget, used at
+        apply time to drop a default that was archived/deleted since it was set
+        (YNAB's bulk PATCH is all-or-nothing, so one stale id would otherwise
+        fail the whole batch)."""
+        return {c["id"] for g in self.get_categories(budget_id) for c in g["categories"]}
+
     def get_transactions(self, budget_id: str, account_id: str, since_date: str) -> list[dict]:
         data = self._get(
             f"/budgets/{budget_id}/accounts/{account_id}/transactions",
