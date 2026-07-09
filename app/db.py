@@ -41,6 +41,27 @@ CREATE TABLE IF NOT EXISTS conversions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_conversions_user ON conversions(user_id);
+
+CREATE TABLE IF NOT EXISTS events (
+    id          TEXT PRIMARY KEY,
+    -- Nullable on purpose: a failed-login event (added later) has no user, and
+    -- there is deliberately NO "REFERENCES users(id) ON DELETE CASCADE" — an
+    -- audit/activity row must survive a user delete, not vanish with it.
+    user_id     TEXT,
+    event_type  TEXT NOT NULL,
+    -- The one summable quantity (e.g. transactions converted on an apply), in
+    -- its own column so the per-user metric is SUM(count), never json_extract
+    -- over `detail`. NULL for events that have no count.
+    count       INTEGER,
+    -- Display-only extras (e.g. account_id). Never summed; never holds a token,
+    -- password, or transaction amount/memo — see the memo marker rules.
+    detail      TEXT,
+    -- Defaulted in-DB so it matches users.created_at's datetime('now') format
+    -- exactly (space-separated, no 'T'); record_event never passes a Python
+    -- isoformat string, which would sort wrong in the last-activity MAX().
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_events_user_created ON events(user_id, created_at);
 """
 
 # Columns added after the table first shipped. CREATE TABLE IF NOT EXISTS won't
@@ -57,6 +78,11 @@ _MIGRATIONS = (
     # Per-user opt-in: refresh stale pending counts on GET /conversions.
     # Default 0 (off) — behavior is unchanged until a user turns it on.
     ("users", "refresh_on_load", "INTEGER NOT NULL DEFAULT 0"),
+    # Admin flag for the /admin dashboard. Default 0 (off); flipped out-of-band
+    # by `python -m app.set_admin <email>`. On an existing DB this ALTERs in;
+    # a fresh DB gets it via CREATE TABLE. The matching read is _row_to_user in
+    # users.py — miss that and require_admin 404s everyone, David included.
+    ("users", "is_admin", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
@@ -104,6 +130,12 @@ def connect(data_dir: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    # Wait up to 5s for a competing writer instead of raising SQLITE_BUSY
+    # immediately. WAL allows concurrent readers but still a single writer, and
+    # sync routes run in a threadpool (plus recording an event now adds a write
+    # to every action), so brief write contention is expected. Benefits every
+    # writer, not just events.
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 

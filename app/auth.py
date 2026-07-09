@@ -5,6 +5,7 @@ import time
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
+from . import events
 from .config import get_settings
 from .templates import templates
 from .users import User, UserStore, hash_password, normalize_email, verify_password
@@ -76,6 +77,16 @@ def require_login(request: Request) -> User:
         request.session.pop("user_id", None)
         request.session.pop("email", None)
         raise HTTPException(status_code=303, headers={"Location": "/login"})
+    return user
+
+
+def require_admin(request: Request) -> User:
+    """Dependency: the logged-in User iff they're an admin. A logged-in
+    non-admin gets a 404 (not 403) so /admin's existence isn't disclosed;
+    an anonymous visitor still gets require_login's 303 to /login."""
+    user = require_login(request)
+    if not user.is_admin:
+        raise HTTPException(status_code=404, detail="Not found")
     return user
 
 
@@ -153,6 +164,7 @@ def signup(
         user = get_user_store().create(email, password)
     except sqlite3.IntegrityError:
         return error("That email is already registered — log in instead.", 409)
+    events.record_event(get_settings().data_dir, user.id, events.SIGNUP)
     _login_session(request, user)
     return RedirectResponse("/conversions", status_code=303)
 
@@ -183,6 +195,7 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
     # wrong passwords.
     if verify_password(password, user.password_hash if user else _DUMMY_HASH) and user:
         _throttle.pop(email, None)
+        events.record_event(get_settings().data_dir, user.id, events.LOGIN)
         _login_session(request, user)
         return RedirectResponse("/conversions", status_code=303)
     _record_login_failure(email)

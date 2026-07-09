@@ -133,3 +133,50 @@ def test_init_dedupes_pre_existing_duplicate_accounts_then_enforces_uniqueness(t
     conn.close()
 
     db.init(tmp_path)  # idempotent: re-running must not error
+
+
+# Schema predating the admin work: no users.is_admin column, no events table —
+# a live production DB before the admin dashboard shipped.
+_SCHEMA_BEFORE_ADMIN = """
+CREATE TABLE users (
+    id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    refresh_on_load INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE conversions (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, budget_id TEXT NOT NULL,
+    budget_name TEXT NOT NULL, account_id TEXT NOT NULL, account_name TEXT NOT NULL,
+    from_currency TEXT NOT NULL, to_currency TEXT NOT NULL, start_date TEXT NOT NULL,
+    last_synced TEXT, pending_count INTEGER, pending_checked_at TEXT
+);
+INSERT INTO users (id, email, password_hash) VALUES ('u1', 'a@b.com', 'x');
+"""
+
+
+def test_init_migrates_admin_column_and_events_table(tmp_path):
+    """A fresh tmp DB ships is_admin via CREATE TABLE and never exercises the
+    ALTER; pin the migration against a pre-admin DB. The events table arrives
+    via CREATE TABLE IF NOT EXISTS (no ALTER needed for a whole new table)."""
+    conn = sqlite3.connect(db.db_path(tmp_path))
+    conn.executescript(_SCHEMA_BEFORE_ADMIN)
+    conn.commit()
+    conn.close()
+
+    db.init(tmp_path)  # must ALTER is_admin in and CREATE the events table
+
+    conn = db.connect(tmp_path)
+    user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+    assert "is_admin" in user_cols
+    # the pre-existing user survives, defaulting to non-admin
+    user = conn.execute("SELECT * FROM users WHERE id = 'u1'").fetchone()
+    assert user["is_admin"] == 0
+    # the events table now exists and accepts an insert
+    conn.execute(
+        "INSERT INTO events (id, user_id, event_type, count) VALUES ('e1', 'u1', 'apply', 2)"
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM events WHERE id = 'e1'").fetchone()
+    assert row["count"] == 2 and row["created_at"] is not None
+    conn.close()
+
+    db.init(tmp_path)  # idempotent

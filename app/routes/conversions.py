@@ -8,7 +8,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse
 from starlette.datastructures import FormData
 
-from .. import oauth
+from .. import events, oauth
 from ..auth import require_login
 from ..config import get_settings
 from ..connections import ConnectionStore
@@ -340,6 +340,9 @@ def create(
         # The pre-check above just lost a race to a concurrent request for
         # the same account — the DB's unique constraint is the real backstop.
         raise HTTPException(409, "That account already has a conversion configured") from exc
+    events.record_event(
+        get_settings().data_dir, user.id, events.CONVERSION_CREATED, detail=account_id
+    )
     return RedirectResponse(f"/conversions/{conversion['id']}", status_code=303)
 
 
@@ -437,6 +440,11 @@ async def batch_create(
     # tampered with (same reason to_currency is derived, not posted).
     accounts = await run_in_threadpool(_account_index, ynab)
     created = await run_in_threadpool(_create_batch, user.id, selected, form, accounts)
+    if created:
+        events.record_event(
+            get_settings().data_dir, user.id, events.CONVERSION_CREATED,
+            detail=f"batch:{created}",
+        )
     return RedirectResponse(f"/conversions?created={created}", status_code=303)
 
 
@@ -542,6 +550,9 @@ def edit(
         )
     except DuplicateAccountError as exc:
         raise HTTPException(409, "That account already has a conversion configured") from exc
+    events.record_event(
+        get_settings().data_dir, user.id, events.CONVERSION_UPDATED, detail=account_id
+    )
     return RedirectResponse(f"/conversions/{conversion_id}", status_code=303)
 
 
@@ -563,12 +574,21 @@ def bulk_delete(
     if len(ids) > _MAX_BULK_DELETE:
         raise HTTPException(400, f"Too many conversions selected (max {_MAX_BULK_DELETE})")
     get_store().delete_many(user.id, ids)
+    # detail, not count: count is reserved for the transactions-converted metric
+    # (only apply events carry it), so a delete count must not pollute that sum.
+    events.record_event(
+        get_settings().data_dir, user.id, events.CONVERSION_DELETED,
+        detail=f"bulk:{len(ids)}",
+    )
     return RedirectResponse("/conversions", status_code=303)
 
 
 @router.post("/conversions/{conversion_id}/delete")
 def delete(conversion_id: str, user: User = Depends(require_login)):
     get_store().delete(user.id, conversion_id)
+    events.record_event(
+        get_settings().data_dir, user.id, events.CONVERSION_DELETED, detail=conversion_id
+    )
     return RedirectResponse("/conversions", status_code=303)
 
 
@@ -850,6 +870,12 @@ async def apply(
     # A YNABError here (401/429/other) propagates to the global handler — same
     # routing single-preview has always had (401 -> reconnect, 429 -> its page).
     result = await _apply_updates(user.id, ynab, conversion, updates, meta)
+    # count = transactions actually converted (the one summable metric the admin
+    # dashboard reads). Only apply events carry a count.
+    events.record_event(
+        get_settings().data_dir, user.id, events.APPLY,
+        count=len(result["applied"]), detail=conversion_id,
+    )
     skipped_splits = result["skipped_splits"]
     suffix = f"&skipped_splits={skipped_splits}" if skipped_splits else ""
     return RedirectResponse(
@@ -895,6 +921,10 @@ async def apply_all(
                 {"account_name": conversion["account_name"], "error": str(exc)[:120]}
             )
             continue
+        events.record_event(
+            get_settings().data_dir, user.id, events.APPLY,
+            count=len(result["applied"]), detail=cid,
+        )
         results.append(
             {
                 "account_name": conversion["account_name"],

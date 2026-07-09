@@ -43,17 +43,21 @@ class User:
     email: str
     password_hash: str
     refresh_on_load: bool = False
+    is_admin: bool = False
 
 
 def _row_to_user(row) -> User:
-    # refresh_on_load is stored 0/1; some code paths (tests, older rows) may
-    # not carry it, so default to off.
+    # refresh_on_load / is_admin are stored 0/1; some code paths (tests, rows
+    # read before the migration ALTERs the column in) may not carry them, so
+    # default to off. The is_admin guard is load-bearing: drop it and every
+    # user reads is_admin=False, so require_admin 404s everyone, David included.
     keys = row.keys() if hasattr(row, "keys") else []
     return User(
         id=row["id"],
         email=row["email"],
         password_hash=row["password_hash"],
         refresh_on_load=bool(row["refresh_on_load"]) if "refresh_on_load" in keys else False,
+        is_admin=bool(row["is_admin"]) if "is_admin" in keys else False,
     )
 
 
@@ -106,3 +110,28 @@ class UserStore:
             conn.commit()
         finally:
             conn.close()
+
+    def set_admin_by_email(self, email: str, is_admin: bool) -> bool:
+        """Flip the admin flag for the user with this email. Returns True if a
+        row was updated, False if no such user exists (so the CLI can fail
+        loudly on a typo instead of silently no-opping). Set out-of-band, not
+        via any web route — there is deliberately no self-serve admin grant."""
+        conn = db.connect(self.data_dir)
+        try:
+            cur = conn.execute(
+                "UPDATE users SET is_admin = ? WHERE email = ?",
+                (1 if is_admin else 0, normalize_email(email)),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+    def list_all(self) -> list[User]:
+        """Every user, oldest first — for the admin dashboard only."""
+        conn = db.connect(self.data_dir)
+        try:
+            rows = conn.execute("SELECT * FROM users ORDER BY created_at, id").fetchall()
+        finally:
+            conn.close()
+        return [_row_to_user(row) for row in rows]

@@ -12,6 +12,7 @@ from . import auth, db
 from .config import get_settings
 from .connections import ConnectionStore
 from .rates import RatesError
+from .routes import admin as admin_routes
 from .routes import conversions
 from .routes import settings as settings_routes
 from .templates import templates
@@ -155,6 +156,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(settings_routes.router)
     app.include_router(conversions.router)
+    app.include_router(admin_routes.router)
     return app
 
 

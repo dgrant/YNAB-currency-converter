@@ -4,7 +4,7 @@ import secrets
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-from .. import oauth
+from .. import events, oauth
 from ..auth import get_user_store, require_login
 from ..config import get_settings
 from ..connections import ConnectionStore
@@ -61,6 +61,7 @@ def settings_page(request: Request, user: User = Depends(require_login)):
 @router.post("/settings/ynab/disconnect")
 def disconnect(user: User = Depends(require_login)):
     get_connection_store().delete(user.id)
+    events.record_event(get_settings().data_dir, user.id, events.YNAB_DISCONNECTED)
     return RedirectResponse("/settings?ok=disconnected", status_code=303)
 
 
@@ -111,4 +112,5 @@ def oauth_callback(
     except oauth.OAuthGrantError:
         return RedirectResponse("/settings?error=denied", status_code=303)
     oauth.save_token_response(get_connection_store(), user.id, tokens)
+    events.record_event(get_settings().data_dir, user.id, events.YNAB_CONNECTED)
     return RedirectResponse("/settings?ok=connected", status_code=303)
