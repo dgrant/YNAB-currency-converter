@@ -4,6 +4,18 @@ All notable changes to this project are documented here. Versions use gstack's
 four-part `MAJOR.MINOR.PATCH.MICRO` scheme; the canonical version lives in the
 root `VERSION` file. New entries go directly under this header, newest first.
 
+## [0.5.1.0] - 2026-07-09
+
+### Added
+- **Sort transactions in the preview tables by clicking a column header.** The
+  single-account preview and the combined "Preview all" page now let you sort
+  the transaction rows by Date, Payee, Original amount, Rate, or Converted
+  amount. Click a header to sort ascending, click again for descending; the
+  active column shows an arrow. Sorting happens instantly in the browser and
+  keeps every row's tick state, action, and edited rate — nothing is sent to
+  YNAB and the totals are unchanged. Previously these tables could only be read
+  in the order YNAB returned them.
+
 ## [0.5.0.0] - 2026-07-09
 
 ### Added

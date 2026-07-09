@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import sortable_headers %}
 {% block title %}Preview all — Currency Converter for YNAB{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -50,20 +51,14 @@
         Approve in YNAB on apply
       </label>
     </div>
-    <table class="group-table"
+    <table class="group-table sortable"
            data-from="{{ c.from_currency }}" data-to="{{ c.to_currency }}"
            data-from-digits="{{ group.from_digits }}" data-to-digits="{{ group.to_digits }}">
       <thead>
         <tr>
           <th><input type="checkbox" class="group-check" checked
                      aria-label="Select all for {{ c.account_name }}"></th>
-          <th>Date</th>
-          <th>Payee</th>
-          <th>Action</th>
-          <th class="memo">Memo</th>
-          <th class="num">Original ({{ c.from_currency }})</th>
-          <th class="num">Rate</th>
-          <th class="num">Converted ({{ c.to_currency }})</th>
+          {{ sortable_headers(c.from_currency, c.to_currency) }}
         </tr>
       </thead>
       <tbody>
@@ -89,14 +84,14 @@
             </select>
           </td>
           <td class="memo">{{ row.old_memo }}</td>
-          <td class="num">{{ row.original_display }}</td>
+          <td class="num" data-sort-value="{{ row.original_milliunits }}">{{ row.original_display }}</td>
           <td class="num fx">
             <input type="text" inputmode="decimal"
                    class="rate-input{% if row.rate_overridden %} overridden{% endif %}"
                    name="rate_{{ row.id }}" value="{{ row.rate_display }}"
                    aria-label="Rate for {{ row.payee_name or 'transaction' }} on {{ row.date }}">
           </td>
-          <td class="num fx">{{ row.new_display }}</td>
+          <td class="num fx" data-sort-value="{{ row.new_milliunits }}">{{ row.new_display }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -207,4 +202,5 @@
     });
   }
 </script>
+<script src="/static/sortable.js?v={{ build_id()[:12] }}"></script>
 {% endblock %}

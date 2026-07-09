@@ -70,6 +70,20 @@ def login(client, email=EMAIL, password=PASSWORD):
     return connect_ynab(client, token, email=email)
 
 
+def assert_sortable_markup(text):
+    """Shared assertions for the client-side sort wiring on the transaction
+    preview tables (app/static/sortable.js). Both the single-account preview
+    and the grouped preview-all render the same five sortable columns and raw
+    numeric sort values; each caller additionally asserts its own table class
+    (`class="sortable"` vs `group-table sortable`). Fixtures use one txn of
+    -1817000 milliunits at rate 0.0087987, so converted = -15990."""
+    for col in ("date", "payee", "original", "rate", "converted"):
+        assert f'data-sort="{col}"' in text, f"missing sortable header: {col}"
+    assert 'data-sort-value="-1817000"' in text  # original cell: raw milliunits
+    assert 'data-sort-value="-15990"' in text     # converted cell: -1817 * 0.0087987
+    assert "/static/sortable.js" in text
+
+
 def mock_budgets(iso_code="USD"):
     """Create/edit validate to_currency against the budget's currency in YNAB."""
     return respx.get(f"{YNAB}/budgets").mock(

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import sortable_headers %}
 {% block content %}
 <div class="page-head">
   <h1>Preview: {{ conversion.account_name }}</h1>
@@ -37,17 +38,11 @@
       Approve transactions in YNAB on apply
     </label>
   </div>
-  <table>
+  <table class="sortable">
     <thead>
       <tr>
         <th><input type="checkbox" checked onclick="document.querySelectorAll('.row-check').forEach(c => c.checked = this.checked); updateTotals()"></th>
-        <th>Date</th>
-        <th>Payee</th>
-        <th>Action</th>
-        <th class="memo">Memo</th>
-        <th class="num">Original ({{ conversion.from_currency }})</th>
-        <th class="num">Rate</th>
-        <th class="num">Converted ({{ conversion.to_currency }})</th>
+        {{ sortable_headers(conversion.from_currency, conversion.to_currency) }}
       </tr>
     </thead>
     <tbody>
@@ -74,14 +69,14 @@
           </select>
         </td>
         <td class="memo">{{ row.old_memo }}</td>
-        <td class="num">{{ row.original_display }}</td>
+        <td class="num" data-sort-value="{{ row.original_milliunits }}">{{ row.original_display }}</td>
         <td class="num fx">
           <input type="text" inputmode="decimal"
                  class="rate-input{% if row.rate_overridden %} overridden{% endif %}"
                  name="rate_{{ row.id }}" value="{{ row.rate_display }}"
                  aria-label="Rate for {{ row.payee_name or 'transaction' }} on {{ row.date }}">
         </td>
-        <td class="num fx">{{ row.new_display }}</td>
+        <td class="num fx" data-sort-value="{{ row.new_milliunits }}">{{ row.new_display }}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -143,6 +138,7 @@
     s.closest("tr").classList.toggle("no-convert", !isConvert(s.value)));
   updateTotals();
 </script>
+<script src="/static/sortable.js?v={{ build_id()[:12] }}"></script>
 {% else %}
 <div class="card">
   <p>Nothing to convert — all {{ total_fetched }} transaction{{ "s" if total_fetched != 1 }}

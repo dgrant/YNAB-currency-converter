@@ -11,6 +11,7 @@ from httpx import Response
 from test_app_flow import (
     FX,
     YNAB,
+    assert_sortable_markup,
     create_conversion,
     login,
     mock_budgets,
@@ -114,6 +115,24 @@ def test_preview_all_all_splits_group_shows_caught_up(app_client):
     assert r.status_code == 200
     assert "caught up" in r.text
     assert _conversion_row(cid)["pending_count"] == 0
+
+
+@respx.mock
+def test_preview_all_transaction_table_is_sortable(app_client):
+    """The grouped preview's transaction tables carry the client-side sort
+    wiring (see app/static/sortable.js): the `sortable` class, clickable
+    per-column headers, the raw numeric sort values on the amount cells, and
+    the script include. The reorder itself is JS, exercised in a browser."""
+    mock_budgets()
+    _mock_rates()
+    _mock_txns("a1", [_txn("t1")])
+    token = login(app_client)
+    create_conversion(app_client, token, "a1", "Japan Trip")
+
+    r = app_client.post("/conversions/preview-all", data={"csrf_token": token})
+    assert r.status_code == 200
+    assert "group-table sortable" in r.text
+    assert_sortable_markup(r.text)
 
 
 @respx.mock

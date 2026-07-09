@@ -1,0 +1,16 @@
+{# Shared column headers for the transaction preview tables (preview.html and
+   preview_all.html). Both tables are sorted client-side by app/static/sortable.js,
+   which sorts by COLUMN INDEX — so the two pages must keep the exact same column
+   set and data-sort names or sorting silently breaks on one of them. Defining the
+   header row once here removes that drift risk. The leading checkbox <th> differs
+   between the two pages (select-all vs per-group), so it stays in each template;
+   this macro emits everything after it. #}
+{% macro sortable_headers(from_currency, to_currency) %}
+<th data-sort="date" data-sort-type="text"><button type="button" class="sort">Date <span class="arrow"></span></button></th>
+<th data-sort="payee" data-sort-type="text"><button type="button" class="sort">Payee <span class="arrow"></span></button></th>
+<th>Action</th>
+<th class="memo">Memo</th>
+<th class="num" data-sort="original" data-sort-type="number"><button type="button" class="sort">Original ({{ from_currency }}) <span class="arrow"></span></button></th>
+<th class="num" data-sort="rate" data-sort-type="number"><button type="button" class="sort">Rate <span class="arrow"></span></button></th>
+<th class="num" data-sort="converted" data-sort-type="number"><button type="button" class="sort">Converted ({{ to_currency }}) <span class="arrow"></span></button></th>
+{% endmacro %}

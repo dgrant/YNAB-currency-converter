@@ -2,7 +2,14 @@
 to the preview endpoint recomputes that row's amount and memo marker."""
 import respx
 from httpx import Response
-from test_app_flow import FX, YNAB, create_conversion, login, mock_budgets
+from test_app_flow import (
+    FX,
+    YNAB,
+    assert_sortable_markup,
+    create_conversion,
+    login,
+    mock_budgets,
+)
 
 
 def _one_txn():
@@ -29,6 +36,24 @@ def _market_rate():
     return respx.get(f"{FX}/2023-12-29..2024-01-05").mock(
         return_value=Response(200, json={"rates": {"2024-01-05": {"USD": 0.0087987}}})
     )
+
+
+@respx.mock
+def test_preview_transaction_table_is_sortable(app_client):
+    """The single-account preview table carries the client-side sort wiring
+    (see app/static/sortable.js): the `sortable` class, clickable per-column
+    headers, the raw numeric sort value on the amount cell, and the script
+    include. The reorder itself is JS, exercised in a browser."""
+    mock_budgets()
+    _one_txn()
+    _market_rate()
+    token = login(app_client)
+    cid = create_conversion(app_client, token, "a1", "Japan Trip")
+
+    r = app_client.post(f"/conversions/{cid}/preview", data={"csrf_token": token})
+    assert r.status_code == 200
+    assert 'class="sortable"' in r.text
+    assert_sortable_markup(r.text)
 
 
 @respx.mock
