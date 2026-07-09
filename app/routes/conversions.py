@@ -1,6 +1,6 @@
 import asyncio
 import re
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -34,6 +34,14 @@ from ..ynab import YNABClient, YNABError
 # the YNAB budget or exhaust the single worker's threadpool. See index().
 _ONLOAD_STALE_SECONDS = 3600
 _ONLOAD_REFRESH_MAX = 2
+
+# How far back the new/batch forms prefill the start date. start_date is the
+# fetch floor (transactions before it are never pulled), so defaulting to today
+# would silently ignore the backlog a user entered before setup — exactly what
+# they want converted first. The field stays editable; this only changes the
+# prefill. Kept modest so a first preview isn't unbounded (see the cap-large-
+# previews TODO); widen the date by hand to reach further back.
+_DEFAULT_START_LOOKBACK_DAYS = 30
 
 router = APIRouter(dependencies=[Depends(require_login)])
 
@@ -233,7 +241,13 @@ def _form_context(ynab: YNABClient) -> dict:
             }
         )
     currencies = get_rates_client().currencies()
-    return {"budgets": budgets, "currencies": currencies, "today": date.today().isoformat()}
+    default_start = (date.today() - timedelta(days=_DEFAULT_START_LOOKBACK_DAYS)).isoformat()
+    return {
+        "budgets": budgets,
+        "currencies": currencies,
+        "today": date.today().isoformat(),
+        "default_start": default_start,
+    }
 
 
 def _used_account_ids(user_id: str, except_conversion_id: str | None = None) -> list[str]:
@@ -250,6 +264,19 @@ def _reject_duplicate_account(
 ) -> None:
     if account_id in _used_account_ids(user_id, except_conversion_id):
         raise HTTPException(409, "That account already has a conversion configured")
+
+
+def _reject_same_currency(from_currency: str, to_currency: str) -> None:
+    """A conversion from a currency to itself is a no-op that can only harm:
+    Frankfurter has no self-pair rate (so preview would error), and a 1.0 rate
+    would rewrite amounts and stamp memos for nothing. Reject it up front (a
+    400, like the direction-mismatch check) rather than failing later."""
+    if from_currency.upper() == to_currency.upper():
+        raise HTTPException(
+            400,
+            "That account's original currency is already the plan's currency — "
+            "there's nothing to convert.",
+        )
 
 
 def _guess_currency(account_name: str, codes: set[str]) -> str:
@@ -323,6 +350,7 @@ def create(
     _validate_start_date(start_date)
     _reject_duplicate_account(user.id, account_id)
     to_currency = _budget_currency(ynab, budget_id)
+    _reject_same_currency(from_currency, to_currency)
     try:
         conversion = get_store().add(
             user.id,
@@ -376,7 +404,11 @@ def batch_form(
     return templates.TemplateResponse(
         request,
         "batch_form.html",
-        {"plans": plans, "currencies": context["currencies"], "today": context["today"]},
+        {
+            "plans": plans,
+            "currencies": context["currencies"],
+            "default_start": context["default_start"],
+        },
     )
 
 
@@ -408,6 +440,10 @@ def _create_batch(
             continue  # malformed/tampered date: skip this row, not the batch
         from_currency = str(form.get(f"from_{account_id}", "")).upper()
         if not from_currency:
+            continue
+        # A currency-to-itself conversion is a no-op that can only harm; drop
+        # the row rather than fail the batch (same as the create/edit 400).
+        if from_currency == info["to_currency"].upper():
             continue
         to_create.append(
             {
@@ -534,6 +570,7 @@ def edit(
     _get_conversion_or_404(user.id, conversion_id)
     _reject_duplicate_account(user.id, account_id, except_conversion_id=conversion_id)
     to_currency = _budget_currency(ynab, budget_id)
+    _reject_same_currency(from_currency, to_currency)
     try:
         get_store().update(
             user.id,

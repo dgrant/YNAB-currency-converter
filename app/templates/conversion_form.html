@@ -25,7 +25,7 @@
 
     <label for="start_date">Start date (earliest unconverted transaction)</label>
     <input type="date" id="start_date" name="start_date"
-           value="{{ conversion.start_date if conversion else today }}" required>
+           value="{{ conversion.start_date if conversion else default_start }}" required>
 
     <input type="hidden" name="budget_name" id="budget_name">
     <input type="hidden" name="account_name" id="account_name">
@@ -38,6 +38,7 @@
   </form>
 </div>
 
+<script src="/static/currency_guess.js?v={{ build_id()[:12] }}"></script>
 <script>
   const budgets = {{ budgets | tojson }};
   const conversion = {{ conversion | tojson }};
@@ -85,7 +86,8 @@
   function guessFromCurrency() {
     if (initializing || fromCurrencyTouched) return;
     const accountName = accountSelect.selectedOptions[0]?.text || "";
-    const code = accountName.toUpperCase().split(/[^A-Z]+/).find(w => currencyCodes.has(w));
+    // Shared with Python's _guess_currency via app/static/currency_guess.js.
+    const code = guessCurrency(accountName, currencyCodes);
     if (code) fromCurrency.value = code;
   }
 
