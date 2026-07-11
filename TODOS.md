@@ -14,6 +14,69 @@ milliunit math, preview→approve contract).
 
 ## Features
 
+### Configurable memo position (prepend vs. append)
+
+**What:** A per-conversion (or per-user) setting to choose whether the FX
+marker is *appended* after the original memo (current behaviour,
+`memo · -1,817 JPY (FX rate: …)`) or *prepended* before it
+(`-1,817 JPY (FX rate: …) · memo`) — mirroring rmillan's "Conversion memo
+position: Left / Right" option.
+
+**Why:** rmillan exposes this choice, so users migrating from his site may
+prefer one layout. Detection already handles both positions (`MARKER_RE` is
+position-independent — see `tests/test_convert.py`), so this is purely about
+which layout *we write*; the plumbing for reading both already exists.
+
+**Context:** Today `_append_marker` / `build_memo` always append with a
+separating space. A prepend variant plus a setting column would cover it.
+Decide the separator alongside this (rmillan uses " · "; we use a plain
+space) — the two decisions travel together.
+
+**Effort:** S
+**Priority:** P3
+
+### Amount offset (multiplier before conversion)
+
+**What:** A per-conversion optional multiplier applied to the original
+amount *before* the FX conversion (rmillan's "Offset — Multiply original
+amount before conversion by"). E.g. an offset of 1.025 to bake in a 2.5%
+card foreign-transaction fee, or a unit rescale.
+
+**Why:** Feature parity with rmillan; lets a user account for a fixed
+markup/fee that the market FX rate doesn't capture, without hand-editing
+every amount.
+
+**Context:** Would slot into `build_preview` next to the existing per-row
+rate override (`overrides`) — multiply `txn["amount"]` by the offset before
+`convert_milliunits`. Decide whether it also scales the amount shown in the
+memo marker (`build_marker` currently records the *original* amount). Keep
+the preview→approve contract: the offset must be reflected in the previewed
+amount the user approves, not applied afterward.
+
+**Effort:** S
+**Priority:** P3
+
+### Custom FX rate per conversion (fixed override rate)
+
+**What:** A per-conversion optional fixed FX rate that replaces the official
+Frankfurter rate for every transaction in that conversion (rmillan's "Custom
+FX rate — Enter a custom foreign exchange rate to ignore the official one").
+
+**Why:** For a currency Frankfurter doesn't cover well, or an account the
+user always exchanges at a known fixed rate, a persistent per-conversion
+rate saves overriding each row by hand.
+
+**Context:** Distinct from the *per-row* manual override already shipped
+(`overrides` in `build_preview`, "Recompute with my rates") — that's an
+ad-hoc, single-preview override; this is a stored default that applies on
+every preview until changed. Would be a nullable column on `conversions`
+threaded into `build_preview` as the rate when set (still overridable
+per-row). Interacts with the offset item above — decide precedence if both
+are set.
+
+**Effort:** S
+**Priority:** P3
+
 ### Convert split transactions properly
 
 **What:** Convert each subtransaction of a split with the same rate,

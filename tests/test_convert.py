@@ -24,6 +24,17 @@ class TestMarkerDetection:
     def test_marker_appended_to_existing_memo(self):
         assert is_converted("lunch with team -1,817 JPY (FX rate: 0.0087987)")
 
+    def test_rmillan_prepend_and_append_formats_are_detected(self):
+        # rmillan lets the user position the marker before OR after the original
+        # memo, joined by a " · " separator, and renders the amount with a
+        # currency-symbol prefix ("US$-17.50") rather than our ISO-code suffix.
+        # Detection is by the position-independent "(FX rate: …)" marker, so
+        # both of his layouts are recognized regardless of separator or the
+        # amount's rendering — a user coming from rmillan (either setting) is
+        # never re-converted here.
+        assert is_converted("US$-17.50 (FX rate: 0.85045) · My original memo")
+        assert is_converted("My original memo · US$-17.50 (FX rate: 0.85045)")
+
     def test_plain_memo_is_not_converted(self):
         assert not is_converted("lunch with team")
         assert not is_converted("rate: 0.0087987")
