@@ -29,8 +29,12 @@ which layout *we write*; the plumbing for reading both already exists.
 
 **Context:** Today `_append_marker` / `build_memo` always append with a
 separating space. A prepend variant plus a setting column would cover it.
-Decide the separator alongside this (rmillan uses " · "; we use a plain
-space) — the two decisions travel together.
+His actual amount rendering matches ours (ISO-code suffix, e.g. "255 JPY" —
+his settings page's "US$-17.50" symbol example is out of date), so the
+amount body is already compatible. The one remaining byte-level unknown is
+the separator: his settings page shows " · ", we use a plain space. Confirm
+that from a real converted memo and decide it alongside position — the two
+decisions travel together.
 
 **Effort:** S
 **Priority:** P3

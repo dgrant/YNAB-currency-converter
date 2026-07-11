@@ -26,13 +26,17 @@ class TestMarkerDetection:
 
     def test_rmillan_prepend_and_append_formats_are_detected(self):
         # rmillan lets the user position the marker before OR after the original
-        # memo, joined by a " · " separator, and renders the amount with a
-        # currency-symbol prefix ("US$-17.50") rather than our ISO-code suffix.
+        # memo. His app actually writes the amount ISO-code-suffixed just like
+        # we do ("255 JPY", "45 USD") — the "US$-17.50" currency-symbol example
+        # on his settings page is out of date and not what he writes.
         # Detection is by the position-independent "(FX rate: …)" marker, so
-        # both of his layouts are recognized regardless of separator or the
-        # amount's rendering — a user coming from rmillan (either setting) is
-        # never re-converted here.
-        assert is_converted("US$-17.50 (FX rate: 0.85045) · My original memo")
+        # both of his layouts are recognized regardless of position or the
+        # separator (his settings page shows " · ") — a user coming from
+        # rmillan (either setting) is never re-converted here. The symbol-style
+        # example is asserted too, defensively, in case any old transaction
+        # ever carried it.
+        assert is_converted("255 JPY (FX rate: 0.0087987) · My original memo")
+        assert is_converted("My original memo · 45 USD (FX rate: 0.85045)")
         assert is_converted("My original memo · US$-17.50 (FX rate: 0.85045)")
 
     def test_plain_memo_is_not_converted(self):
