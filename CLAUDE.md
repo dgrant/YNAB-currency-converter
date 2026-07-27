@@ -90,10 +90,13 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
   caller then records one `ACCOUNT_DELETED` event — a dangling uuid and a date,
   showing that a deletion happened, not whose. `PRAGMA secure_delete`
   (`db.connect`) zeroes those pages as they're freed, and `delete()` then
-  checkpoints the WAL via `db.checkpoint_wal`, which **must check the returned
-  `busy` flag** — `PRAGMA wal_checkpoint(TRUNCATE)` doesn't raise when a reader
-  blocks it, it returns `(busy, …)`, and treating that as success is how a
-  deletion gets reported as permanent while the rows are still in `app.db-wal`.
+  checkpoints the WAL via `db.checkpoint_wal`. That helper **checks the
+  returned `busy` flag** and retries — `PRAGMA wal_checkpoint(TRUNCATE)`
+  doesn't raise when a reader blocks it, it returns `(busy, …)`, and treating
+  that as success is how a deletion gets reported as permanent while the rows
+  are still in `app.db-wal`. It never raises and its callers treat it as
+  best-effort (the rows are already gone); a checkpoint that stays busy is
+  logged at ERROR rather than failing the request.
   VACUUM is deliberately NOT on the request path (it rewrites the file under an
   exclusive lock; with open signup on a single worker, a signup/delete loop
   would monopolize the one writer slot) — it lives in `db.vacuum`, called by the

@@ -19,8 +19,9 @@ of appearing to succeed.
 
 What it deletes: everything belonging to that account — the user row (email +
 password hash), their YNAB OAuth tokens, their conversion configs, and their
-activity-log rows — then VACUUMs so the bytes aren't left readable in free
-pages. What it keeps: one `account_deleted` row carrying a dangling uuid and a
+activity-log rows. `PRAGMA secure_delete` zeroes those bytes as they are
+freed; the CLI then VACUUMs to reclaim pages freed by *older* deletions, from
+before that pragma existed. What it keeps: one `account_deleted` row carrying a dangling uuid and a
 date, so the log still shows a deletion happened. What it can't touch: anything
 in YNAB itself — already-converted transactions keep their amounts and memos,
 and the OAuth grant should be revoked by the user from YNAB's security
@@ -64,11 +65,18 @@ def _confirm(email: str, assume_yes: bool) -> None:
         raise SystemExit("Aborted — nothing deleted.")
 
 
-if __name__ == "__main__":
-    args = sys.argv[1:]
-    assume_yes = "--yes" in args
-    args = [a for a in args if a != "--yes"]
+def main(argv: list[str]) -> str:
+    """Parse args, confirm, delete. Split out from the __main__ block below so
+    it can be tested: this is the whole front door to an irreversible
+    operation, and "python -m app.delete_user --yes" with no email must fail
+    loudly rather than do something surprising."""
+    assume_yes = "--yes" in argv
+    args = [a for a in argv if a != "--yes"]
     if len(args) != 1:
         raise SystemExit("usage: python -m app.delete_user <email> [--yes]")
     _confirm(args[0], assume_yes)
-    print(delete_user(args[0]))
+    return delete_user(args[0])
+
+
+if __name__ == "__main__":
+    print(main(sys.argv[1:]))

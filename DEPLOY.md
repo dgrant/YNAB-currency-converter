@@ -100,9 +100,11 @@ the live DB once (worth doing after this release, to clear pages freed before
 
 ```bash
 docker compose exec app python -c "from app.config import get_settings; from app import db; db.vacuum(get_settings().data_dir)"
-``` It cannot touch YNAB itself:
-transactions the app already converted keep their amounts and memos, and the
-OAuth grant is revoked by the user from YNAB → Account Settings → Security.
+```
+
+Deletion cannot touch YNAB itself: transactions the app already converted keep
+their amounts and memos, and the OAuth grant is revoked by the user from
+YNAB → Account Settings → Security.
 
 One thing the app can't reach: if this account was migrated from v1 with
 `import_legacy`, `data/conversions.json.imported` still holds its budget/account

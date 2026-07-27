@@ -219,8 +219,9 @@ def connect(data_dir: Path) -> sqlite3.Connection:
     # hash and both YNAB tokens recoverable verbatim in app.db (and in every
     # backup taken afterwards) until those pages happen to be reused — which
     # would make the privacy policy's deletion promise untrue. Negligible cost
-    # at this DB's size. Applies to future deletes only; UserStore.delete also
-    # VACUUMs to reclaim pages freed before this was turned on.
+    # at this DB's size. Applies to future deletes only; `db.vacuum` (run by
+    # the delete_user CLI, and documented in DEPLOY.md) reclaims pages freed
+    # before this was turned on.
     conn.execute("PRAGMA secure_delete = ON")
     # Wait up to 5s for a competing writer instead of raising SQLITE_BUSY
     # immediately. WAL allows concurrent readers but still a single writer, and

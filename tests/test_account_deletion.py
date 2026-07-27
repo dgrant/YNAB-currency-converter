@@ -3,8 +3,11 @@ the guarantee that a deleted account leaves no per-user rows behind."""
 import io
 import sqlite3
 import sys
+from types import SimpleNamespace
 
 import pytest
+import respx
+from httpx import Response
 
 from app import db, events
 from app.config import get_settings
@@ -12,7 +15,17 @@ from app.connections import ConnectionStore
 from app.routes.settings import WRONG_PASSWORD_ERROR
 from app.store import ConversionStore
 from app.users import UserStore
-from tests.test_app_flow import EMAIL, PASSWORD, connect_ynab, get_csrf, signup
+from tests.test_app_flow import (
+    EMAIL,
+    PASSWORD,
+    YNAB,
+    connect_ynab,
+    create_conversion,
+    get_csrf,
+    login,
+    mock_budgets,
+    signup,
+)
 
 OTHER_EMAIL = "other@example.com"
 INTACT = {"users": 1, "ynab_connections": 1, "conversions": 1}
@@ -133,10 +146,13 @@ def test_delete_rolls_back_if_a_statement_fails(app_client, monkeypatch):
                 raise sqlite3.OperationalError("boom")
             return self._conn.execute(sql, *args)
 
-    monkeypatch.setattr(db, "connect", lambda data_dir: _FailsOnUsers(real_connect(data_dir)))
-    with pytest.raises(sqlite3.OperationalError):
-        UserStore(data_dir).delete(user.id)
-    monkeypatch.undo()
+    # context(), not undo(): undo() unwinds the WHOLE MonkeyPatch instance,
+    # including the DATA_DIR/SECRET_KEY env patches conftest set up, which
+    # would point a later get_settings() at the developer's real data/app.db.
+    with monkeypatch.context() as m:
+        m.setattr(db, "connect", lambda data_dir: _FailsOnUsers(real_connect(data_dir)))
+        with pytest.raises(sqlite3.OperationalError):
+            UserStore(data_dir).delete(user.id)
 
     assert _row_counts(data_dir, user.id) == INTACT
 
@@ -196,9 +212,9 @@ def test_delete_does_not_vacuum_on_the_request_path(app_client, monkeypatch):
             statements.append(sql)
             return self._conn.execute(sql, *args)
 
-    monkeypatch.setattr(db, "connect", lambda data_dir: _Recording(real_connect(data_dir)))
-    UserStore(data_dir).delete(user.id)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setattr(db, "connect", lambda data_dir: _Recording(real_connect(data_dir)))
+        UserStore(data_dir).delete(user.id)
 
     assert not any("VACUUM" in s.upper() for s in statements)
     # ...but the WAL is still checkpointed, or the old rows stay on disk.
@@ -231,6 +247,102 @@ def test_checkpoint_reports_a_busy_result_instead_of_claiming_success(tmp_path, 
     finally:
         reader.close()
         writer.close()
+
+
+class _FakeConn:
+    """Minimal stand-in for the one call checkpoint_wal makes. sqlite3's real
+    Connection.execute is read-only and can't be monkeypatched, and the states
+    below (a raising checkpoint, a non-WAL DB, a reader that clears between
+    attempts) can't be produced reliably against a real file."""
+
+    def __init__(self, rows=None, raises=None):
+        self.rows = list(rows or [])
+        self.raises = raises
+        self.calls = 0
+
+    def execute(self, *args, **kwargs):
+        self.calls += 1
+        if self.raises:
+            raise self.raises
+        row = self.rows.pop(0)
+        return SimpleNamespace(fetchone=lambda: row)
+
+
+def test_checkpoint_survives_a_sqlite_error(caplog):
+    """checkpoint_wal must never raise: the rows are already deleted, so a
+    checkpoint problem can't turn a completed deletion into a 500."""
+    import logging
+
+    with caplog.at_level(logging.ERROR, logger="ynabfx"):
+        assert db.checkpoint_wal(_FakeConn(raises=sqlite3.OperationalError("x"))) is False
+    assert "checkpoint failed outright" in caplog.text
+
+
+def test_checkpoint_treats_a_missing_row_as_success():
+    """Defensive branch only. A real non-WAL SQLite returns (0, -1, -1), not
+    None — see the sibling test — so this guards a hypothetical driver, and
+    must read as success rather than busy."""
+    assert db.checkpoint_wal(_FakeConn(rows=[None])) is True
+
+
+def test_checkpoint_succeeds_on_a_non_wal_database(tmp_path):
+    """The real non-WAL shape, against an actual connection."""
+    conn = sqlite3.connect(tmp_path / "plain.db")
+    try:
+        conn.execute("PRAGMA journal_mode = DELETE")
+        assert db.checkpoint_wal(conn) is True
+    finally:
+        conn.close()
+
+
+def test_checkpoint_retries_until_the_reader_clears(monkeypatch):
+    """The common real case: busy once, then it goes through. The
+    busy-forever test alone leaves the retry itself unexercised."""
+    monkeypatch.setattr(db, "_CHECKPOINT_RETRY_SECONDS", 0)
+    conn = _FakeConn(rows=[(1, 4, 0), (0, 0, 4)])  # busy, then done
+
+    assert db.checkpoint_wal(conn) is True
+    assert conn.calls == 2
+
+
+def test_cli_reports_a_row_that_vanished_mid_delete(app_client, monkeypatch):
+    """Concurrent self-serve deletion: the CLI must not print a success line
+    for work that didn't happen."""
+    from app.delete_user import delete_user
+
+    _seed_account(app_client)
+    monkeypatch.setattr(UserStore, "delete", lambda self, user_id: False)
+
+    with pytest.raises(SystemExit, match="disappeared mid-delete"):
+        delete_user(EMAIL)
+
+
+@pytest.mark.parametrize("argv", [[], ["--yes"], ["a@b.com", "c@d.com"]])
+def test_cli_rejects_a_bad_argument_list(argv):
+    """0 or 2+ emails must fail loudly rather than delete something surprising."""
+    from app.delete_user import main
+
+    with pytest.raises(SystemExit, match="usage: python -m app.delete_user"):
+        main(argv)
+
+
+def test_cli_main_strips_the_yes_flag_and_deletes(app_client, monkeypatch):
+    from app import delete_user as cli
+
+    data_dir, user, _ = _seed_account(app_client)
+    confirmed = []
+    monkeypatch.setattr(
+        cli, "_confirm", lambda email, assume_yes: confirmed.append((email, assume_yes))
+    )
+
+    message = cli.main(["--yes", EMAIL])
+
+    # Not just "it deleted": that main() consults _confirm at all, and that
+    # --yes actually reaches it. Dropping the flag would make
+    # `docker compose exec -T ... --yes` die with "Not a terminal".
+    assert confirmed == [(EMAIL, True)]
+    assert EMAIL in message
+    assert _row_counts(data_dir, user.id) == GONE
 
 
 def test_cli_compacts_the_database(app_client, monkeypatch):
@@ -325,6 +437,31 @@ def test_a_stranger_cannot_lock_you_out_of_deleting(app_client, app_client_facto
     # ...and the real owner can still delete their account.
     response = _delete_account(app_client, token)
     assert response.status_code == 303
+    assert _row_counts(data_dir, user.id) == GONE
+
+
+def test_login_cannot_reach_the_reauth_counter(app_client, app_client_factory):
+    """The two throttles live in separate dicts. When they shared one, keyed
+    "reauth:<user_id>", an anonymous visitor could POST /login with that
+    literal string as the email — /login never checks the value looks like an
+    email — and lock the owner out of deleting their own account."""
+    from app.auth import LOCKOUT_THRESHOLD
+
+    data_dir, user, token = _seed_account(app_client)
+
+    with app_client_factory() as attacker:
+        for _ in range(LOCKOUT_THRESHOLD + 2):
+            attacker.post(
+                "/login",
+                data={
+                    "email": f"reauth:{user.id}",
+                    "password": "guess",
+                    "csrf_token": get_csrf(attacker),
+                },
+                follow_redirects=False,
+            )
+
+    assert _delete_account(app_client, token).status_code == 303
     assert _row_counts(data_dir, user.id) == GONE
 
 
@@ -459,14 +596,121 @@ def test_apply_aborts_instead_of_patching_ynab_after_a_delete(app_client):
         )
 
 
+def _vanish_after_first_read(monkeypatch, real_get, only_id=None):
+    """Really delete the user's conversion rows straight after the route's
+    first successful lookup — the shape of an account deletion landing while an
+    apply is queued for its lock.
+
+    A counter that just returns None on later calls would be simpler but is
+    tied to how many times the route happens to read the store, so it can go
+    vacuous the moment that changes. Deleting for real means every later read
+    is genuinely empty, whatever the call order."""
+
+    def flaky_get(self, user_id, conversion_id):
+        row = real_get(self, user_id, conversion_id)
+        if row is not None and only_id in (None, conversion_id):
+            conn = db.connect(self.data_dir)
+            try:
+                conn.execute(
+                    "DELETE FROM conversions WHERE user_id = ? AND id = ?",
+                    (user_id, conversion_id),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return row
+
+    monkeypatch.setattr(ConversionStore, "get", flaky_get)
+
+
+@respx.mock
+def test_apply_route_redirects_when_the_conversion_vanishes(app_client, monkeypatch):
+    """Regression: apply() used to fall back to the pre-lock snapshot and PATCH
+    anyway. It now raises ConversionGoneError — this pins the HTTP outcome the
+    user actually sees, and that nothing was sent to YNAB."""
+    mock_budgets()
+    patched = respx.patch(f"{YNAB}/budgets/b1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": []}})
+    )
+    # A real unconverted transaction: with an empty list `safe` is empty and no
+    # PATCH can fire, so `not patched.called` would hold even with the fix
+    # reverted and prove nothing.
+    respx.get(f"{YNAB}/budgets/b1/accounts/a1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": [
+            {"id": "t1", "date": "2024-01-05", "amount": -1817000,
+             "payee_name": "Ramen", "memo": None, "deleted": False},
+        ]}})
+    )
+    token = login(app_client)
+    conversion_id = create_conversion(app_client, token, "a1", "Japan Trip")
+    _vanish_after_first_read(monkeypatch, ConversionStore.get)
+
+    response = app_client.post(
+        f"/conversions/{conversion_id}/apply",
+        data={
+            "selected": ["t1"], "action_t1": "convert", "original_t1": "-1817000",
+            "amount_t1": "-15990", "memo_t1": "x", "csrf_token": token,
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/conversions"
+    assert not patched.called, "nothing may be written to YNAB after the row is gone"
+
+
+@respx.mock
+def test_apply_all_skips_a_vanished_group_and_finishes_the_run(app_client, monkeypatch):
+    """Regression, apply-all half: the group whose row disappeared is skipped
+    like one deleted before the run, and the rest of the batch still lands."""
+    mock_budgets()
+    patched = respx.patch(f"{YNAB}/budgets/b1/transactions").mock(
+        return_value=Response(200, json={"data": {"transactions": []}})
+    )
+    # A real unconverted transaction, so the reverted "fall back to the stale
+    # snapshot" behavior would actually reach the PATCH — otherwise `safe` is
+    # empty and `not patched.called` would hold no matter what.
+    for account in ("a1", "a2"):
+        respx.get(f"{YNAB}/budgets/b1/accounts/{account}/transactions").mock(
+            return_value=Response(200, json={"data": {"transactions": [
+                {"id": "t1", "date": "2024-01-05", "amount": -1817000,
+                 "payee_name": "Ramen", "memo": None, "deleted": False},
+            ]}})
+        )
+    token = login(app_client)
+    gone = create_conversion(app_client, token, "a1", "Japan Trip")
+    survivor = create_conversion(app_client, token, "a2", "Europe Trip")
+    # Scoped to the one id, so the sibling group is genuinely still there and
+    # "the rest of the batch still lands" is a real assertion.
+    _vanish_after_first_read(monkeypatch, ConversionStore.get, only_id=gone)
+
+    # The vanishing group must carry a real selection: an empty one short-
+    # circuits _apply_updates before it ever reaches the lock, which would
+    # make this test pass without exercising the fix at all.
+    response = app_client.post(
+        "/conversions/apply-all",
+        data={
+            "conversion_ids": [gone, survivor],
+            f"selected_{gone}": ["t1"], f"selected_{survivor}": ["t1"],
+            "action_t1": "convert", "original_t1": "-1817000",
+            "amount_t1": "-15990", "memo_t1": "x", "csrf_token": token,
+        },
+        follow_redirects=False,
+    )
+
+    # The run completes rather than 500ing on the vanished group, and exactly
+    # one PATCH goes out: the survivor's. Two would mean the deleted group was
+    # written anyway; zero would mean one bad group killed the whole batch.
+    assert response.status_code == 303
+    assert patched.call_count == 1
+
+
 def test_token_refresh_aborts_when_the_account_was_deleted_mid_request(app_client):
     """The other half of the same race: a request refreshing its OAuth token
     when the account disappears must not carry on with the new token. The
     refresh already rotated at YNAB, but persisting it hits the users FK — so
     the request has to stop rather than keep operating on a deleted user's
     budget."""
-    from types import SimpleNamespace
-
     from app import oauth
     from app.ynab import YNABError
 

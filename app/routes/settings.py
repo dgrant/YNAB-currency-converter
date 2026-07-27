@@ -7,7 +7,7 @@ from fastapi.responses import RedirectResponse
 from .. import auth, events, oauth
 from ..auth import get_user_store, require_login
 from ..config import get_settings
-from ..connections import ConnectionStore
+from ..connections import ConnectionGoneError, ConnectionStore
 from ..templates import templates
 from ..users import User, verify_password
 
@@ -113,12 +113,11 @@ def delete_account(
 
     Attempts are throttled, or this form is an unthrottled oracle for guessing
     the password of a session someone else's browser left logged in. The
-    counter is keyed per user (auth.reauth_key), NOT per email: sharing
-    /login's email counter would let any anonymous visitor lock the owner out
-    of deleting their own account just by failing logins for that address.
+    counter is keyed by user id and lives in its own store, NOT /login's
+    email-keyed one: a shared counter would let any anonymous visitor lock the
+    owner out of deleting their own account (see app/auth.py).
     """
-    throttle_key = auth.reauth_key(user.id)
-    locked_for = auth.password_lockout_seconds(throttle_key)
+    locked_for = auth.password_lockout_seconds(user.id)
     if locked_for:
         return _settings_response(
             request,
@@ -127,13 +126,16 @@ def delete_account(
             status_code=429,
         )
     if not verify_password(password, user.password_hash):
-        auth.record_password_failure(throttle_key)
+        auth.record_password_failure(user.id)
         return _settings_response(request, user, error=WRONG_PASSWORD_ERROR, status_code=403)
-    auth.clear_password_failures(throttle_key)
+    auth.clear_password_failures(user.id)
+    # The bool return is ignored here (unlike the CLI, which reports a typo):
+    # False just means a concurrent request won the race, and the account is
+    # gone either way, which is all this user asked for.
     get_user_store().delete(user.id)
-    # After the delete, so a failure there leaves no "deleted" row for a live
-    # account. This is the one row that outlives the user: a dangling uuid and
-    # a date, recording that a deletion happened, not whose.
+    # Recorded after the delete, so a failure there leaves no "deleted" row for
+    # a live account. This is the one row that outlives the user: a dangling
+    # uuid and a date, recording that a deletion happened, not whose.
     events.record_event(
         get_settings().data_dir, user.id, events.ACCOUNT_DELETED, detail="self"
     )
@@ -176,6 +178,13 @@ def oauth_callback(
         tokens = oauth.exchange_code(settings, code, _redirect_uri(request))
     except oauth.OAuthGrantError:
         return RedirectResponse("/settings?error=denied", status_code=303)
-    oauth.save_token_response(get_connection_store(), user.id, tokens)
+    try:
+        oauth.save_token_response(get_connection_store(), user.id, tokens)
+    except ConnectionGoneError:
+        # The account was deleted between require_login and the token write.
+        # No token was stored; send them to the landing page rather than let
+        # the FK error surface as a 500 (get_access_token handles the same
+        # race the same way).
+        return RedirectResponse("/", status_code=303)
     events.record_event(get_settings().data_dir, user.id, events.YNAB_CONNECTED)
     return RedirectResponse("/settings?ok=connected", status_code=303)

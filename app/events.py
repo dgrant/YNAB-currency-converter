@@ -1,5 +1,8 @@
-"""Append-only activity/audit log (the `events` table) + the per-user
-aggregates the /admin dashboard reads.
+"""Activity/audit log (the `events` table) + the per-user aggregates the
+/admin dashboard reads.
+
+Append-only in normal operation; the one exception is account deletion, which
+removes that user's rows wholesale (see `UserStore.delete`).
 
 This is a best-effort activity log, NOT a tamper-proof forensic record: an
 event insert is separate from the external YNAB write it accompanies (no shared

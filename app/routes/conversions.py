@@ -844,7 +844,9 @@ async def _apply_updates(
     present_ids union, so a txn posted under the wrong group can't validate.
     Returns {applied, skipped_splits, dropped}. Raises YNABError on a failed
     fetch/PATCH — the caller decides (single apply re-raises to the handler;
-    apply-all treats non-401/429 as a per-group failure).
+    apply-all treats non-401/429 as a per-group failure). Raises
+    ConversionGoneError if the row disappeared while waiting for the lock
+    (single apply redirects to /conversions; apply-all skips that group).
 
     `category_ids_cache` (budget_id -> valid ids, or None if that budget's
     categories couldn't be fetched) lets apply-all fetch each budget's category
