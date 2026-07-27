@@ -522,6 +522,18 @@ async def batch_create(
     return RedirectResponse(f"/conversions?created={created}", status_code=303)
 
 
+class ConversionGoneError(Exception):
+    """The conversion disappeared while an apply was waiting for its lock —
+    it was deleted, or the whole account was. Raised instead of proceeding
+    from the pre-lock snapshot, so a delete can't be followed by a PATCH to
+    the user's YNAB budget. Single apply turns it into a redirect; apply-all
+    skips that group, the same as a conversion that vanished before the run."""
+
+    def __init__(self, conversion_id: str) -> None:
+        super().__init__(f"Conversion {conversion_id} no longer exists")
+        self.conversion_id = conversion_id
+
+
 # One asyncio.Lock per conversion, guarding apply's fetch→filter→PATCH section.
 # Lazily created on the single event loop, so a plain dict is safe.
 _apply_locks: dict[str, asyncio.Lock] = {}
@@ -852,10 +864,15 @@ async def _apply_updates(
     async with _apply_lock(conversion_id):
         # Re-read start_date under the lock; a concurrent apply may have just
         # advanced it, and comparing against a pre-lock snapshot could regress
-        # the floor. Falls back to the passed snapshot if the row vanished.
-        current_conversion = (
-            await run_in_threadpool(get_store().get, user_id, conversion_id) or conversion
-        )
+        # the floor.
+        current_conversion = await run_in_threadpool(get_store().get, user_id, conversion_id)
+        if current_conversion is None:
+            # The conversion (or the whole account) was deleted while this
+            # apply waited for the lock. Falling back to the pre-lock snapshot
+            # here would PATCH the user's real YNAB budget *after* they were
+            # told their account and settings were gone. Stop instead: nothing
+            # has been written yet at this point.
+            raise ConversionGoneError(conversion_id)
         current = await run_in_threadpool(
             ynab.get_transactions,
             conversion["budget_id"],
@@ -1105,7 +1122,13 @@ async def apply(
         ) from exc
     # A YNABError here (401/429/other) propagates to the global handler — same
     # routing single-preview has always had (401 -> reconnect, 429 -> its page).
-    result = await _apply_updates(user.id, ynab, conversion, updates, meta)
+    try:
+        result = await _apply_updates(user.id, ynab, conversion, updates, meta)
+    except ConversionGoneError:
+        # Deleted (or the account was) while this apply queued for the lock.
+        # Nothing was written to YNAB; send them back to the list rather than
+        # to a detail page for a row that no longer exists.
+        return RedirectResponse("/conversions", status_code=303)
     # count = transactions actually converted (the one summable metric the admin
     # dashboard reads). Only apply events carry a count. run_in_threadpool: this
     # is an async handler and record_event does a blocking sqlite write.
@@ -1171,6 +1194,10 @@ async def apply_all(
             result = await _apply_updates(
                 user.id, ynab, conversion, updates, meta, category_ids_cache
             )
+        except ConversionGoneError:
+            # Vanished while queued for its lock; same outcome as the
+            # "deleted since the preview" check above — skip it silently.
+            continue
         except YNABError as exc:
             if exc.status_code in (401, 429):
                 raise

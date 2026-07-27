@@ -86,10 +86,21 @@ succeed — and run on the host by mistake it would open a different, empty
 `data/app.db` and delete nothing.
 
 This deletes everything belonging to that account — email + password hash, YNAB
-OAuth tokens, conversion configs and activity-log rows — then VACUUMs so the
-bytes aren't left readable in the database's free pages. One row survives: an
-`account_deleted` event carrying a dangling uuid and a date, so the log still
-shows a deletion happened without recording whose. It cannot touch YNAB itself:
+OAuth tokens, conversion configs and activity-log rows. `PRAGMA secure_delete`
+zeroes those bytes as they're freed, and the CLI then VACUUMs to reclaim pages
+freed by *older* deletions (from before that pragma was turned on). One row
+survives: an `account_deleted` event carrying a dangling uuid and a date, so the
+log still shows a deletion happened without recording whose.
+
+The self-serve route deliberately does NOT vacuum — VACUUM rewrites the whole
+file under an exclusive lock, and with open signup on a single worker a
+signup/delete loop would monopolize SQLite's one writer. If you want to compact
+the live DB once (worth doing after this release, to clear pages freed before
+`secure_delete` existed), run it out of hours:
+
+```bash
+docker compose exec app python -c "from app.config import get_settings; from app import db; db.vacuum(get_settings().data_dir)"
+``` It cannot touch YNAB itself:
 transactions the app already converted keep their amounts and memos, and the
 OAuth grant is revoked by the user from YNAB → Account Settings → Security.
 

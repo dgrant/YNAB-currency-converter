@@ -88,17 +88,32 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
   (`aggregate_by_user` selects `FROM users`) and `events.detail` holds real
   YNAB account ids, so keeping them was privacy surface with no reader. The
   caller then records one `ACCOUNT_DELETED` event — a dangling uuid and a date,
-  showing that a deletion happened, not whose. `delete()` also VACUUMs and
-  checkpoints the WAL: `PRAGMA secure_delete` (set in `db.connect`) only zeroes
-  pages freed from here on, and the live DB predates it, so without the rebuild
-  the email/hash/tokens stay readable in free pages — which would make the
-  privacy policy's promise false. Two entry points, both routing through that
-  method: the user's own `POST /settings/delete-account` (re-authenticates with
-  the current password — a session cookie alone must not destroy an account,
-  and attempts share `/login`'s per-email throttle so the form isn't a
-  password-guessing oracle) and `python -m app.delete_user <email>` for emailed
-  deletion requests. Deleting the tokens does not revoke the YNAB grant (YNAB
-  has no revocation endpoint) — the UI and privacy policy both say so.
+  showing that a deletion happened, not whose. `PRAGMA secure_delete`
+  (`db.connect`) zeroes those pages as they're freed, and `delete()` then
+  checkpoints the WAL via `db.checkpoint_wal`, which **must check the returned
+  `busy` flag** — `PRAGMA wal_checkpoint(TRUNCATE)` doesn't raise when a reader
+  blocks it, it returns `(busy, …)`, and treating that as success is how a
+  deletion gets reported as permanent while the rows are still in `app.db-wal`.
+  VACUUM is deliberately NOT on the request path (it rewrites the file under an
+  exclusive lock; with open signup on a single worker, a signup/delete loop
+  would monopolize the one writer slot) — it lives in `db.vacuum`, called by the
+  CLI and documented in DEPLOY.md. Two entry points, both routing through
+  `delete()`: the user's own `POST /settings/delete-account` (re-authenticates
+  with the current password — a session cookie alone must not destroy an
+  account — throttled by `auth.reauth_key(user.id)`, **not** by email: sharing
+  `/login`'s email counter would let any anonymous visitor lock the owner out of
+  deleting their own account) and `python -m app.delete_user <email>` for
+  emailed deletion requests. Deleting the tokens does not revoke the YNAB grant
+  (YNAB has no revocation endpoint) — the UI and privacy policy both say so.
+- **A deletion must stop work already in flight** — a request authenticated
+  before the delete still holds a `YNABClient` and a conversion snapshot, and
+  the app's core promise is that it never writes to a budget the user was told
+  is gone. Two guards, both of which exist for this: `_apply_updates` raises
+  `ConversionGoneError` when the row has vanished under its lock (it must never
+  fall back to the pre-lock snapshot), and `ConnectionStore._upsert` raises
+  `ConnectionGoneError` on the users FK violation so `oauth.get_access_token`
+  turns it into a 401 rather than returning a token it could not persist. Any
+  new long-running per-user operation needs the same treatment.
 - **CSRF** — every POST form must include `{{ csrf_input(request) }}`
   (template global in `templates.py`); `verify_csrf` is a dependency on both
   routers and 403s POSTs without the session's token. Remember this when

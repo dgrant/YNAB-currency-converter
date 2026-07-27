@@ -4,8 +4,12 @@ Connections are opened per operation (cheap for SQLite, and safe with
 FastAPI's threadpool for sync routes). WAL mode keeps concurrent
 readers/writers from blocking each other.
 """
+import logging
 import sqlite3
+import time
 from pathlib import Path
+
+logger = logging.getLogger("ynabfx")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -141,6 +145,66 @@ def _dedupe_and_index_conversions(conn: sqlite3.Connection) -> None:
 
 def db_path(data_dir: Path) -> Path:
     return data_dir / "app.db"
+
+
+# How hard to try to truncate the WAL before giving up and logging.
+_CHECKPOINT_ATTEMPTS = 3
+_CHECKPOINT_RETRY_SECONDS = 0.1
+
+
+def checkpoint_wal(conn: sqlite3.Connection) -> bool:
+    """Fold the write-ahead log into the database and truncate it. Returns
+    whether it actually completed.
+
+    Called after deleting an account: without it, `app.db-wal` keeps the
+    pre-delete copy of the rows (email, password hash, YNAB tokens) even
+    though the rows are gone from `app.db`.
+
+    `PRAGMA wal_checkpoint(TRUNCATE)` does NOT raise when it cannot finish —
+    it returns `(busy, log_frames, checkpointed)`, and `busy = 1` means a
+    reader on an older snapshot blocked it and the old frames are still on
+    disk. Treating that as success is how a deletion gets reported as
+    permanent while the data is still readable, so retry briefly and log
+    loudly if it never clears. Never raises: the rows are already deleted and
+    the account is gone either way, so this must not turn a completed deletion
+    into a 500.
+    """
+    for attempt in range(_CHECKPOINT_ATTEMPTS):
+        try:
+            row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        except sqlite3.Error:
+            logger.exception("WAL checkpoint failed outright")
+            return False
+        # row is None on a non-WAL database (nothing to checkpoint).
+        if row is None or not row[0]:
+            return True
+        if attempt + 1 < _CHECKPOINT_ATTEMPTS:
+            time.sleep(_CHECKPOINT_RETRY_SECONDS)
+    logger.error(
+        "WAL checkpoint still busy after %d attempts — deleted rows may remain "
+        "readable in %s until a later checkpoint succeeds",
+        _CHECKPOINT_ATTEMPTS,
+        "app.db-wal",
+    )
+    return False
+
+
+def vacuum(data_dir: Path) -> None:
+    """Rebuild the database file, reclaiming pages freed before
+    `PRAGMA secure_delete` was turned on (older deletions left their bytes
+    readable in the free list).
+
+    Deliberately NOT called from any request path: VACUUM rewrites the whole
+    file under an exclusive lock, which on a single worker is a denial of
+    service waiting to happen. Maintenance only — the delete_user CLI and the
+    manual step in DEPLOY.md.
+    """
+    conn = connect(data_dir)
+    try:
+        conn.execute("VACUUM")
+        checkpoint_wal(conn)
+    finally:
+        conn.close()
 
 
 def connect(data_dir: Path) -> sqlite3.Connection:

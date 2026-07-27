@@ -122,11 +122,15 @@ class UserStore:
         date is all that survives, recording that a deletion happened without
         recording whose.
 
-        VACUUM runs after the commit, outside the transaction: `secure_delete`
-        zeroes pages freed from here on, but the live DB predates that pragma,
-        so rebuilding the file is what actually purges bytes freed earlier. The
-        WAL checkpoint then truncates the write-ahead log, which would
-        otherwise still hold the pre-delete copy of those pages.
+        After the commit it checkpoints the write-ahead log, which would
+        otherwise keep a pre-delete copy of the rows on disk. `secure_delete`
+        (db.connect) already zeroes the pages this DELETE frees, so no VACUUM
+        is needed here — and it must NOT run here: VACUUM rewrites the entire
+        database under an exclusive lock, and with open signup and a single
+        uvicorn worker, a loop of signup-then-delete would monopolize SQLite's
+        one writer slot. Compaction of pages freed *before* secure_delete
+        existed is a one-off maintenance job instead (`db.vacuum`, run by the
+        CLI and documented in DEPLOY.md).
         """
         conn = db.connect(self.data_dir)
         try:
@@ -137,8 +141,7 @@ class UserStore:
                 cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
             deleted = cur.rowcount > 0
             if deleted:
-                conn.execute("VACUUM")
-                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                db.checkpoint_wal(conn)
             return deleted
         finally:
             conn.close()

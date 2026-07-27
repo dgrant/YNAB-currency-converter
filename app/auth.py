@@ -61,23 +61,38 @@ def _is_locked(email: str) -> bool:
 
 
 # Public face of the throttle, for routes outside this module that also check a
-# password. Every such route must share ONE counter per email: a re-auth prompt
-# with its own (or no) limit is a way to guess the same password without ever
-# tripping the lockout /login enforces.
+# password. They pass a KEY, not necessarily an email — see reauth_key.
 
 
-def password_lockout_seconds(email: str) -> int:
-    """Seconds until another password attempt for this email is accepted, or 0
+def reauth_key(user_id: str) -> str:
+    """Throttle key for re-entering your own password on an authenticated page
+    (delete-account), deliberately separate from the login counter.
+
+    Keyed by user id rather than email because the email counter is reachable
+    by anyone: an anonymous visitor can hammer /login with a known address and
+    keep it locked, which — on a shared counter — would let a stranger stop the
+    owner from deleting their own account. A re-auth attempt requires the
+    victim's session, so per-user is the tightest key that still closes the
+    password-guessing oracle.
+
+    Not stored in the session either: that is a client-held cookie, so an
+    attacker could snapshot it before guessing and replay it to zero the count.
+    """
+    return f"reauth:{user_id}"
+
+
+def password_lockout_seconds(key: str) -> int:
+    """Seconds until another password attempt for this key is accepted, or 0
     if one is allowed right now."""
-    return _lockout_remaining(email) if _is_locked(email) else 0
+    return _lockout_remaining(key) if _is_locked(key) else 0
 
 
-def record_password_failure(email: str) -> None:
-    _record_login_failure(email)
+def record_password_failure(key: str) -> None:
+    _record_login_failure(key)
 
 
-def clear_password_failures(email: str) -> None:
-    _throttle.pop(email, None)
+def clear_password_failures(key: str) -> None:
+    _throttle.pop(key, None)
 
 
 def get_user_store() -> UserStore:

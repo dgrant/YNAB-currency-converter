@@ -46,6 +46,11 @@ def delete_user(email: str) -> str:
         # success line for work that didn't happen.
         raise SystemExit(f"{user.email} disappeared mid-delete — nothing to do.")
     events.record_event(settings.data_dir, user.id, events.ACCOUNT_DELETED, detail="admin")
+    # Compaction lives here, not in UserStore.delete: VACUUM rewrites the whole
+    # file under an exclusive lock, which is fine for an operator running one
+    # command and unacceptable on a request path. It reclaims pages freed
+    # before secure_delete was enabled; the delete itself is already zeroed.
+    db.vacuum(settings.data_dir)
     return f"Deleted {user.email} and all associated data."
 
 

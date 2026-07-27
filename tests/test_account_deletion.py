@@ -171,6 +171,82 @@ def test_deleted_account_leaves_no_ynab_identifiers_on_disk(app_client):
         assert sentinel not in raw, f"{sentinel!r} survived the delete"
 
 
+def test_delete_does_not_vacuum_on_the_request_path(app_client, monkeypatch):
+    """VACUUM rewrites the whole file under an exclusive lock. With open signup
+    and one uvicorn worker, a signup/delete loop would monopolize SQLite's
+    single writer, so compaction belongs in the CLI, not here."""
+    data_dir, user, _ = _seed_account(app_client)
+    statements = []
+    real_connect = db.connect
+
+    class _Recording:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+        def __enter__(self):
+            return self._conn.__enter__()
+
+        def __exit__(self, *exc_info):
+            return self._conn.__exit__(*exc_info)
+
+        def execute(self, sql, *args):
+            statements.append(sql)
+            return self._conn.execute(sql, *args)
+
+    monkeypatch.setattr(db, "connect", lambda data_dir: _Recording(real_connect(data_dir)))
+    UserStore(data_dir).delete(user.id)
+    monkeypatch.undo()
+
+    assert not any("VACUUM" in s.upper() for s in statements)
+    # ...but the WAL is still checkpointed, or the old rows stay on disk.
+    assert any("wal_checkpoint" in s for s in statements)
+
+
+def test_checkpoint_reports_a_busy_result_instead_of_claiming_success(tmp_path, caplog):
+    """PRAGMA wal_checkpoint(TRUNCATE) returns (busy, ...) rather than raising
+    when a reader blocks it. Treating that as success is how a deletion gets
+    reported as permanent while the data is still in app.db-wal."""
+    import logging
+
+    db.init(tmp_path)
+    writer = db.connect(tmp_path)
+    reader = db.connect(tmp_path)
+    try:
+        writer.execute(
+            "INSERT INTO users (id, email, password_hash) VALUES ('u1', 'a@b.c', 'h')"
+        )
+        writer.commit()
+        # Hold an open snapshot so the checkpoint can't truncate.
+        reader.execute("BEGIN")
+        reader.execute("SELECT * FROM users").fetchall()
+        writer.execute("DELETE FROM users WHERE id = 'u1'")
+        writer.commit()
+
+        with caplog.at_level(logging.ERROR, logger="ynabfx"):
+            assert db.checkpoint_wal(writer) is False
+        assert "still busy" in caplog.text
+    finally:
+        reader.close()
+        writer.close()
+
+
+def test_cli_compacts_the_database(app_client, monkeypatch):
+    """The CLI is the offline path, so it still VACUUMs — that's what reclaims
+    pages freed before secure_delete was turned on."""
+    from app.delete_user import delete_user
+
+    _seed_account(app_client)
+    vacuumed = []
+    monkeypatch.setattr(db, "vacuum", lambda data_dir: vacuumed.append(data_dir))
+
+    delete_user(EMAIL)
+
+    assert vacuumed, "delete_user should compact the DB after deleting"
+
+
 # --- self-serve HTTP flow --------------------------------------------------
 
 
@@ -220,21 +296,36 @@ def test_delete_account_attempts_are_throttled(app_client):
     assert _row_counts(data_dir, user.id) == INTACT
 
 
-def test_delete_account_failures_count_against_login(app_client):
-    """One counter per email across every route that checks a password —
-    a second, separate allowance would just be a way around the first."""
+def test_a_stranger_cannot_lock_you_out_of_deleting(app_client, app_client_factory):
+    """The re-auth throttle is keyed per user, not per email. Sharing /login's
+    email counter would hand any anonymous visitor a way to block the owner
+    from deleting their own account just by failing logins for that address."""
     from app.auth import LOCKOUT_THRESHOLD
 
-    _, _, token = _seed_account(app_client)
-    for _ in range(LOCKOUT_THRESHOLD):
-        _delete_account(app_client, token, password="wrong")
+    data_dir, user, token = _seed_account(app_client)
 
-    response = app_client.post(
-        "/login",
-        data={"email": EMAIL, "password": PASSWORD, "csrf_token": get_csrf(app_client)},
-        follow_redirects=False,
-    )
-    assert response.status_code == 429
+    # An anonymous attacker hammers /login with the victim's email...
+    with app_client_factory() as attacker:
+        for _ in range(LOCKOUT_THRESHOLD + 2):
+            attacker.post(
+                "/login",
+                data={
+                    "email": EMAIL,
+                    "password": "guess",
+                    "csrf_token": get_csrf(attacker),
+                },
+                follow_redirects=False,
+            )
+        assert attacker.post(
+            "/login",
+            data={"email": EMAIL, "password": PASSWORD, "csrf_token": get_csrf(attacker)},
+            follow_redirects=False,
+        ).status_code == 429  # the login lockout itself still works
+
+    # ...and the real owner can still delete their account.
+    response = _delete_account(app_client, token)
+    assert response.status_code == 303
+    assert _row_counts(data_dir, user.id) == GONE
 
 
 def test_delete_account_requires_csrf(app_client):
@@ -335,6 +426,75 @@ def test_signup_works_again_with_the_same_email(app_client):
         follow_redirects=False,
     )
     assert response.status_code == 303
+
+
+# --- races between a deletion and work already in flight --------------------
+
+
+def test_apply_aborts_instead_of_patching_ynab_after_a_delete(app_client):
+    """An apply that was queued behind its lock when the account was deleted
+    must stop, not fall back to its pre-lock snapshot. Falling back would PATCH
+    the user's real YNAB budget *after* they were told everything was gone.
+
+    `ynab=None` is the assertion: the abort has to happen before any YNAB call,
+    so a regression can't quietly succeed here."""
+    import asyncio
+
+    from app.routes.conversions import ConversionGoneError, _apply_updates
+
+    data_dir, user, _ = _seed_account(app_client)
+    conversion = ConversionStore(data_dir).add(user.id, _conv("acct-race"))
+
+    UserStore(data_dir).delete(user.id)  # ...the account goes away mid-apply
+
+    with pytest.raises(ConversionGoneError):
+        asyncio.run(
+            _apply_updates(
+                user.id,
+                None,
+                conversion,
+                [{"id": "t1", "amount": -1000, "memo": "x"}],
+                {"t1": {"original": -1817000, "action": "convert"}},
+            )
+        )
+
+
+def test_token_refresh_aborts_when_the_account_was_deleted_mid_request(app_client):
+    """The other half of the same race: a request refreshing its OAuth token
+    when the account disappears must not carry on with the new token. The
+    refresh already rotated at YNAB, but persisting it hits the users FK — so
+    the request has to stop rather than keep operating on a deleted user's
+    budget."""
+    from types import SimpleNamespace
+
+    from app import oauth
+    from app.ynab import YNABError
+
+    data_dir, user, _ = _seed_account(app_client)
+    store = ConnectionStore(data_dir)
+    store.set_oauth(user.id, "stale-access", "old-refresh", 0)  # already expired
+
+    settings = SimpleNamespace(
+        ynab_client_id="cid", ynab_client_secret="sec", ynab_oauth_base="https://x"
+    )
+
+    def refresh_then_delete(_settings, _refresh_token):
+        # The account is deleted in the window between YNAB issuing the new
+        # token and us storing it.
+        UserStore(data_dir).delete(user.id)
+        return {"access_token": "new-access", "refresh_token": "new-refresh", "expires_in": 7200}
+
+    original = oauth.refresh_tokens
+    oauth.refresh_tokens = refresh_then_delete
+    try:
+        with pytest.raises(YNABError) as exc_info:
+            oauth.get_access_token(settings, store, user.id)
+    finally:
+        oauth.refresh_tokens = original
+
+    # 401 routes to the existing reconnect path, not a 500 error page.
+    assert exc_info.value.status_code == 401
+    assert store.get(user.id) is None  # the token was NOT persisted
 
 
 # --- CLI -------------------------------------------------------------------

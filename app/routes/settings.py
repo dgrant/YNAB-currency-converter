@@ -111,11 +111,14 @@ def delete_account(
     YNAB has no token-revocation endpoint — so the confirmation points the user
     at YNAB's own security settings, same as Disconnect does.
 
-    Attempts share /login's per-email throttle: without that, this form is an
-    unthrottled oracle for guessing the password of a session someone else's
-    browser left logged in.
+    Attempts are throttled, or this form is an unthrottled oracle for guessing
+    the password of a session someone else's browser left logged in. The
+    counter is keyed per user (auth.reauth_key), NOT per email: sharing
+    /login's email counter would let any anonymous visitor lock the owner out
+    of deleting their own account just by failing logins for that address.
     """
-    locked_for = auth.password_lockout_seconds(user.email)
+    throttle_key = auth.reauth_key(user.id)
+    locked_for = auth.password_lockout_seconds(throttle_key)
     if locked_for:
         return _settings_response(
             request,
@@ -124,9 +127,9 @@ def delete_account(
             status_code=429,
         )
     if not verify_password(password, user.password_hash):
-        auth.record_password_failure(user.email)
+        auth.record_password_failure(throttle_key)
         return _settings_response(request, user, error=WRONG_PASSWORD_ERROR, status_code=403)
-    auth.clear_password_failures(user.email)
+    auth.clear_password_failures(throttle_key)
     get_user_store().delete(user.id)
     # After the delete, so a failure there leaves no "deleted" row for a live
     # account. This is the one row that outlives the user: a dangling uuid and

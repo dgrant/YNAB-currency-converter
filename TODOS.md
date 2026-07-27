@@ -405,14 +405,28 @@ half-completed deletion is the one failure mode a deletion request can't have.
 account ids — privacy surface with no reader), so they now go with the account
 and a single `ACCOUNT_DELETED` row survives as a dated marker that a deletion
 happened. The same review caught that SQLite leaves deleted bytes readable in
-free pages: `PRAGMA secure_delete` plus a post-delete `VACUUM` + WAL checkpoint
-make the privacy policy's "permanently removes" true, verified by a test that
-greps the raw DB file for the email, YNAB account id and token. Two entry
-points, both through that method: self-serve `POST /settings/delete-account`,
-which re-authenticates with the current password (a session cookie alone must
-not be able to destroy an account) under `/login`'s shared per-email throttle,
-and shows its confirmation via a one-shot session flag rather than a
-`?deleted=1` param a crafted link could fake; and
+free pages: `PRAGMA secure_delete` plus a WAL checkpoint make the privacy
+policy's "permanently removes" true, verified by a test that greps the raw DB
+file for the email, YNAB account id and token. A follow-up `/codex challenge`
+(cross-model, after Codex was unblocked) then found three problems in those
+fixes: the post-delete `VACUUM` was a denial-of-service on the request path
+(rewrites the whole file under an exclusive lock; open signup + one worker =
+a signup/delete loop monopolizes SQLite's single writer), so compaction moved
+to `db.vacuum` in the CLI; `PRAGMA wal_checkpoint(TRUNCATE)` returns a `busy`
+flag instead of raising, so ignoring it let a concurrent reader leave the
+deleted rows in `app.db-wal` while the app reported permanent deletion; and
+sharing `/login`'s per-email throttle handed any anonymous visitor a way to
+lock the owner out of deleting their own account, so re-auth is now keyed by
+user id. Codex also sharpened the in-flight-work race the first review graded
+cosmetic: `_apply_updates` fell back to its pre-lock snapshot when the row
+vanished and PATCHed anyway, so an apply could write to a YNAB budget *after*
+the deletion confirmation — it now raises `ConversionGoneError`, and a token
+refresh that loses the same race aborts instead of continuing with a token it
+couldn't persist. Two entry points, both through that method: self-serve
+`POST /settings/delete-account`, which re-authenticates with the current
+password (a session cookie alone must not be able to destroy an account), and
+shows its confirmation via a one-shot session flag rather than a `?deleted=1`
+param a crafted link could fake; and
 `docker compose exec app python -m app.delete_user <email>` for emailed
 requests (confirmation prompt, `--yes` for non-TTY, non-zero exit on an unknown
 email — same shape as `set_admin`). Deleting tokens does *not* revoke the YNAB
@@ -421,10 +435,13 @@ point at YNAB → Account Settings → Security; the policy now documents
 self-serve deletion, the one dated marker that survives, and that YNAB data
 already converted is untouched. Tests: `tests/test_account_deletion.py`
 (row-level completeness, nothing recoverable in the raw DB file, other users
-unaffected, transaction rollback on a mid-delete failure, wrong / empty /
-missing password, throttling shared with `/login`, missing CSRF and anonymous
-POSTs rejected, logged out + can't log back in, one-shot confirmation, email
-freed for re-signup, CLI happy path + unknown email + every `_confirm` branch).
+unaffected, transaction rollback on a mid-delete failure, no VACUUM on the
+request path, a busy checkpoint reported rather than swallowed, apply aborting
+instead of PATCHing after a delete, token refresh aborting on the same race,
+wrong / empty / missing password, per-user throttling that a stranger can't
+trip, missing CSRF and anonymous POSTs rejected, logged out + can't log back
+in, one-shot confirmation, email freed for re-signup, CLI happy path + unknown
+email + compaction + every `_confirm` branch).
 
 **Completed:** 2026-07-27
 

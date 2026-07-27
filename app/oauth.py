@@ -10,7 +10,7 @@ import urllib.parse
 import httpx
 
 from .config import Settings
-from .connections import ConnectionStore, YNABConnection
+from .connections import ConnectionGoneError, ConnectionStore, YNABConnection
 from .ynab import YNABError
 
 # Refresh this long before the token actually expires, so a token that is
@@ -160,5 +160,16 @@ def get_access_token(settings: Settings, store: ConnectionStore, user_id: str) -
                 return current.access_token
             store.delete(user_id)
             return None
-        save_token_response(store, user_id, tokens)
+        try:
+            save_token_response(store, user_id, tokens)
+        except ConnectionGoneError as exc:
+            # The account was deleted while we were refreshing. Do not return
+            # the token: this request would otherwise keep operating on the
+            # YNAB budget of an account the user has been told is gone. A 401
+            # is the existing "reconnect" path, and its handler redirects to
+            # /settings, where require_login bounces the dead session to
+            # /login. Nothing has been written to YNAB at this point.
+            raise YNABError(
+                "This account no longer exists", status_code=401
+            ) from exc
         return str(tokens["access_token"])
