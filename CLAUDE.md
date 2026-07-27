@@ -36,7 +36,9 @@ app/
                          #   (grouped dashboard flow); all scoped by user
                          #   (_build_group / _parse_updates / _apply_updates
                          #    are shared by the single and all-accounts paths)
-  routes/settings.py     # /settings: OAuth start/callback, disconnect
+  routes/settings.py     # /settings: OAuth start/callback, disconnect,
+                         #   pending-count opt-in, delete-account (re-auths
+                         #   with the current password)
   templates/ static/
 tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.py is the full HTTP flow
 ```
@@ -68,7 +70,10 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
   the `User` and every store call is scoped by `user.id` — never query
   conversions or connections without it. `auth.py` remains the swap point for
   Google Sign-In later (an OIDC flow would set the same `user_id` session
-  key). `/login` is brute-force throttled per email (in-memory, module state).
+  key). `/login` is brute-force throttled per email (in-memory, module state);
+  `auth.py` keeps a *second*, separate store for re-auth (delete-account),
+  keyed by user id — see the comment there for why merging the two hands a
+  stranger a lockout.
 - **Per-user YNAB credentials** — each user connects on `/settings` via OAuth
   ("Connect to YNAB", available only when `YNAB_CLIENT_ID/SECRET` are set).
   OAuth is the only connection type — the personal-access-token path was

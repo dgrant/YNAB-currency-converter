@@ -40,9 +40,9 @@ default) refreshes stale counts automatically when you open the page.
 
 Nothing is written to YNAB without your approval. The app stores no
 transaction data — just accounts (email + password), each user's YNAB
-credentials, and their configured conversions in a small SQLite database
-(`data/app.db`). YNAB itself is the source of truth for what's been
-converted.
+credentials, their configured conversions, and a small activity log (logins,
+conversions applied) in a SQLite database (`data/app.db`). YNAB itself is the
+source of truth for what's been converted.
 
 ## Multi-user
 
@@ -51,6 +51,22 @@ account via OAuth: register a YNAB OAuth application (free, app.ynab.com →
 Developer Settings), set `YNAB_CLIENT_ID` / `YNAB_CLIENT_SECRET`, and users
 get a "Connect to YNAB" button — no API key needed, revocable from YNAB at
 any time. Tokens refresh automatically.
+
+Deleting an account is self-serve: **Settings → Delete account** asks for the
+password (a logged-in session alone can't destroy an account), then removes the
+account, its YNAB connection, every configured conversion and its activity
+history, overwriting the space that data occupied rather than leaving it
+readable. Nothing in YNAB changes — transactions already converted keep their
+amounts and memos — and the OAuth grant itself is revoked by the user from
+YNAB → Account Settings → Security. To action a request for someone who can no
+longer sign in, run it from the server:
+
+```bash
+docker compose exec app python -m app.delete_user them@example.com
+```
+
+See [DEPLOY.md](DEPLOY.md#deleting-a-user-account) for the details, including
+the one-off compaction step worth running after upgrading to v0.6.0.0.
 
 ## Running
 
@@ -97,6 +113,9 @@ docker compose exec app python -m app.import_legacy you@example.com
 uv sync   # installs runtime + dev dependencies
 uv run pytest
 ```
+
+Release history is in [CHANGELOG.md](CHANGELOG.md); the backlog is
+[TODOS.md](TODOS.md).
 
 ## Notes & limitations
 
