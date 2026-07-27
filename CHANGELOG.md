@@ -4,6 +4,43 @@ All notable changes to this project are documented here. Versions use gstack's
 four-part `MAJOR.MINOR.PATCH.MICRO` scheme; the canonical version lives in the
 root `VERSION` file. New entries go directly under this header, newest first.
 
+## [0.6.0.0] - 2026-07-27
+
+### Added
+- **Delete your account, and everything in it.** Settings now has a "Delete
+  account" section that permanently removes your account: your email address,
+  password, YNAB connection, conversion settings, and activity history. It asks
+  for your password first, so a browser someone left logged in can't destroy an
+  account, and the space the data occupied is overwritten rather than left
+  readable. All that remains afterwards is a dated note that *an* account was
+  deleted, recording nothing about whose. Previously the only way to be removed
+  was to email and wait.
+- **Deletion requests can be actioned directly.** If you'd rather not do it
+  yourself, or you can no longer sign in, `python -m app.delete_user <email>`
+  handles it from the server, with a confirmation prompt and a loud failure on
+  a mistyped address.
+
+### Changed
+- **The privacy policy now describes deletion accurately** — what it removes,
+  the single dated marker that survives, and the two things deletion cannot do:
+  change anything in YNAB (transactions already converted keep their amounts
+  and memos) or revoke this app's YNAB authorization, which you revoke yourself
+  from YNAB → Account Settings → Security.
+
+### Fixed
+- Deleting an account no longer leaves your email, password hash, or YNAB
+  tokens readable in the database file or its write-ahead log.
+- Work already in flight when you delete stops instead of continuing: an
+  in-progress conversion can no longer write to your YNAB budget after you've
+  been told your account is gone, and a YNAB token refresh that lands mid-delete
+  aborts rather than carrying on with a token it couldn't store.
+- Repeated wrong passwords on the delete form are rate-limited, so a stolen
+  session can't be used to guess your password. The limit is tracked per
+  account, so nobody else can lock you out of deleting your own account by
+  failing logins against your email address.
+- The deletion confirmation now appears only for someone who actually just
+  deleted an account; previously a crafted link could show it to anyone.
+
 ## [0.5.1.0] - 2026-07-09
 
 ### Added

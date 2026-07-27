@@ -443,7 +443,7 @@ trip, missing CSRF and anonymous POSTs rejected, logged out + can't log back
 in, one-shot confirmation, email freed for re-signup, CLI happy path + unknown
 email + compaction + every `_confirm` branch).
 
-**Completed:** 2026-07-27
+**Completed:** v0.6.0.0 (2026-07-27)
 
 ### Admin dashboard, per-user metrics, and an activity/audit log
 **(Ops / deployment — closes "Audit log", "Per-user metrics", "Admin interface")**
