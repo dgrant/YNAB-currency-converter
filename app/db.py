@@ -4,8 +4,12 @@ Connections are opened per operation (cheap for SQLite, and safe with
 FastAPI's threadpool for sync routes). WAL mode keeps concurrent
 readers/writers from blocking each other.
 """
+import logging
 import sqlite3
+import time
 from pathlib import Path
+
+logger = logging.getLogger("ynabfx")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -47,9 +51,14 @@ CREATE INDEX IF NOT EXISTS idx_conversions_user ON conversions(user_id);
 
 CREATE TABLE IF NOT EXISTS events (
     id          TEXT PRIMARY KEY,
-    -- Nullable on purpose: a failed-login event (added later) has no user, and
-    -- there is deliberately NO "REFERENCES users(id) ON DELETE CASCADE" — an
-    -- audit/activity row must survive a user delete, not vanish with it.
+    -- Nullable on purpose: a failed-login event (added later) has no user.
+    -- There is deliberately no "REFERENCES users(id) ON DELETE CASCADE" — not
+    -- so rows outlive their user (users.py: UserStore.delete removes them
+    -- explicitly), but because the cascade only fires while the per-connection
+    -- foreign_keys pragma is on, which is too fragile a thing to hang deletion
+    -- correctness on. The ONE row that outlives a user is the account_deleted
+    -- marker, written after the delete: a dangling uuid and a date, recording
+    -- that a deletion happened without recording whose.
     user_id     TEXT,
     event_type  TEXT NOT NULL,
     -- The one summable quantity (e.g. transactions converted on an apply), in
@@ -57,7 +66,9 @@ CREATE TABLE IF NOT EXISTS events (
     -- over `detail`. NULL for events that have no count.
     count       INTEGER,
     -- Display-only extras (e.g. account_id). Never summed; never holds a token,
-    -- password, or transaction amount/memo — see the memo marker rules.
+    -- password, or transaction amount/memo — see the memo marker rules. It DOES
+    -- hold real YNAB account ids, which is why UserStore.delete drops these
+    -- rows rather than keeping them as an "anonymous" activity log.
     detail      TEXT,
     -- Defaulted in-DB so it matches users.created_at's datetime('now') format
     -- exactly (space-separated, no 'T'); record_event never passes a Python
@@ -136,6 +147,90 @@ def db_path(data_dir: Path) -> Path:
     return data_dir / "app.db"
 
 
+# How hard to try to truncate the WAL before giving up and logging.
+_CHECKPOINT_ATTEMPTS = 3
+_CHECKPOINT_RETRY_SECONDS = 0.1
+# A TRUNCATE checkpoint invokes the busy handler, so it inherits `busy_timeout`
+# (5s) and each attempt can block for all of it — 15s per delete, on the request
+# path, with new writers stalled behind the pending checkpoint. That is the same
+# single-writer monopoly that got VACUUM moved off this path, so the checkpoint
+# gets its own short timeout: fail fast, log, let a later checkpoint finish it.
+_CHECKPOINT_BUSY_TIMEOUT_MS = 250
+
+
+def checkpoint_wal(conn: sqlite3.Connection) -> bool:
+    """Fold the write-ahead log into the database and truncate it. Returns
+    whether it actually completed.
+
+    Called after deleting an account. `secure_delete` zeroes the freed pages,
+    but in WAL mode that zeroing is written to the -wal file while the
+    PRE-DELETE copy of the page stays in `app.db` until a checkpoint folds the
+    new version over it. So until this succeeds, the email, password hash and
+    YNAB tokens of a long-lived row are still readable **in the main database
+    file** — the one any `cp`/`docker cp`/volume snapshot backup picks up.
+    (Only on a young row that was never checkpointed does the residue sit in
+    the -wal instead, which is what a fresh test database produces. Both are
+    verified; production is the first case.)
+
+    `PRAGMA wal_checkpoint(TRUNCATE)` does NOT raise when it cannot finish —
+    it returns `(busy, log_frames, checkpointed)`, and `busy = 1` means a
+    reader on an older snapshot blocked it and the old pages are still on
+    disk. Treating that as success is how a deletion gets reported as
+    permanent while the data is still readable, so retry briefly and log
+    loudly if it never clears. Never raises: the rows are already deleted and
+    the account is gone either way, so this must not turn a completed deletion
+    into a 500.
+    """
+    try:
+        previous_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        conn.execute(f"PRAGMA busy_timeout = {_CHECKPOINT_BUSY_TIMEOUT_MS}")
+    except sqlite3.Error:
+        logger.exception("WAL checkpoint could not set its busy timeout")
+        return False
+    try:
+        for attempt in range(_CHECKPOINT_ATTEMPTS):
+            try:
+                row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            except sqlite3.Error:
+                logger.exception("WAL checkpoint failed outright")
+                return False
+            # row is None on a non-WAL database (nothing to checkpoint).
+            if row is None or not row[0]:
+                return True
+            if attempt + 1 < _CHECKPOINT_ATTEMPTS:
+                time.sleep(_CHECKPOINT_RETRY_SECONDS)
+        logger.error(
+            "WAL checkpoint still busy after %d attempts — the pre-delete copy of "
+            "the deleted rows may remain readable in the main database file until "
+            "a later checkpoint succeeds",
+            _CHECKPOINT_ATTEMPTS,
+        )
+        return False
+    finally:
+        try:
+            conn.execute(f"PRAGMA busy_timeout = {previous_timeout}")
+        except sqlite3.Error:
+            logger.exception("WAL checkpoint could not restore the busy timeout")
+
+
+def vacuum(data_dir: Path) -> None:
+    """Rebuild the database file, reclaiming pages freed before
+    `PRAGMA secure_delete` was turned on (older deletions left their bytes
+    readable in the free list).
+
+    Deliberately NOT called from any request path: VACUUM rewrites the whole
+    file under an exclusive lock, which on a single worker is a denial of
+    service waiting to happen. Maintenance only — the delete_user CLI and the
+    manual step in DEPLOY.md.
+    """
+    conn = connect(data_dir)
+    try:
+        conn.execute("VACUUM")
+        checkpoint_wal(conn)
+    finally:
+        conn.close()
+
+
 def connect(data_dir: Path) -> sqlite3.Connection:
     """Open a connection with the pragmas the app relies on. Caller closes."""
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -143,6 +238,15 @@ def connect(data_dir: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    # Overwrite deleted content with zeros instead of leaving it readable in
+    # free pages. Without this, "delete my account" leaves the email, password
+    # hash and both YNAB tokens recoverable verbatim in app.db (and in every
+    # backup taken afterwards) until those pages happen to be reused — which
+    # would make the privacy policy's deletion promise untrue. Negligible cost
+    # at this DB's size. Applies to future deletes only; `db.vacuum` (run by
+    # the delete_user CLI, and documented in DEPLOY.md) reclaims pages freed
+    # before this was turned on.
+    conn.execute("PRAGMA secure_delete = ON")
     # Wait up to 5s for a competing writer instead of raising SQLITE_BUSY
     # immediately. WAL allows concurrent readers but still a single writer, and
     # sync routes run in a threadpool (plus recording an event now adds a write

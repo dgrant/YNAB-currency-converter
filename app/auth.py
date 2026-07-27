@@ -11,14 +11,29 @@ from .templates import templates
 from .users import User, UserStore, hash_password, normalize_email, verify_password
 
 MIN_PASSWORD_LENGTH = 8
+# RFC-max address length; signup enforces it and login rejects anything longer
+# before it can become a throttle key (see login()).
+MAX_EMAIL_LENGTH = 254
 
-# Brute-force throttle for /login, per email (in-memory, single process):
-# after LOCKOUT_THRESHOLD consecutive failures for an email, each further
-# failure doubles the wait before the next attempt is accepted.
+# Brute-force throttles for password checks (in-memory, single process): after
+# LOCKOUT_THRESHOLD consecutive failures for a key, each further failure doubles
+# the wait before the next attempt is accepted.
+#
+# TWO stores, deliberately not one. `_login_throttle` is keyed by email and any
+# anonymous visitor can create entries in it just by POSTing /login, which never
+# validates that the value looks like an email. `_reauth_throttle` is keyed by
+# user id and only an authenticated request can touch it. Namespacing both into
+# one dict (an earlier attempt did: "reauth:<user_id>") puts the re-auth counter
+# back within reach of a stranger, who could POST /login with that literal
+# string as the "email" and lock the owner out of deleting their own account —
+# exactly the denial the per-user key exists to prevent. Separate dicts also
+# stop an attacker flooding /login with junk emails to evict a victim's re-auth
+# entry through the eviction sweep and reset their failure count.
 LOCKOUT_THRESHOLD = 5
 LOCKOUT_MAX_SECONDS = 300.0
-_MAX_TRACKED_EMAILS = 1000
-_throttle: dict[str, dict] = {}
+_MAX_TRACKED_KEYS = 1000
+_login_throttle: dict[str, dict] = {}
+_reauth_throttle: dict[str, dict] = {}
 
 # Verified against when the email doesn't exist, so unknown-email and
 # wrong-password attempts take the same time (no account-probing oracle).
@@ -26,28 +41,51 @@ _DUMMY_HASH = hash_password("dummy-password")
 
 
 def _reset_throttle() -> None:
-    _throttle.clear()
+    _login_throttle.clear()
+    _reauth_throttle.clear()
 
 
-def _throttle_entry(email: str) -> dict:
-    if email not in _throttle and len(_throttle) >= _MAX_TRACKED_EMAILS:
-        # Drop expired entries rather than grow without bound.
-        now = time.monotonic()
-        for key in [k for k, v in _throttle.items() if v["locked_until"] < now]:
-            del _throttle[key]
-    return _throttle.setdefault(email, {"failures": 0, "locked_until": 0.0})
+def _throttle_entry(store: dict[str, dict], key: str) -> dict:
+    """The entry for `key`, creating it if needed and sweeping IDLE entries
+    when the store is over its cap.
+
+    The sweep is a decay on last activity, not an eviction. Two ways to get
+    this wrong, both verified against this code:
+
+    - Evicting the entry closest to expiring (to make the cap a hard ceiling)
+      hands an attacker a lockout bypass: flooding /login with junk keys
+      hammered to the 300s cap pushes out a victim locked at the threshold,
+      whose lockout is only 2s, and their backoff resets.
+    - Sweeping on `locked_until < now` alone is the same bug one step earlier.
+      A counter below the threshold has `locked_until == 0.0`, which is always
+      in the past, so a flood wipes victims *while they are still accumulating*
+      and they never reach a lockout at all.
+
+    Decaying on `last_failure` drops neither: an entry doing work is never
+    touched, and nothing that is merely full stops a new key being tracked.
+    Store size is then bounded by keys that have cost an attacker a scrypt hash
+    within LOCKOUT_MAX_SECONDS, which is the CPU limit, not a memory one.
+    """
+    if key not in store and len(store) >= _MAX_TRACKED_KEYS:
+        cutoff = time.monotonic() - LOCKOUT_MAX_SECONDS
+        for idle in [k for k, v in store.items() if v["last_failure"] < cutoff]:
+            del store[idle]
+    return store.setdefault(
+        key, {"failures": 0, "locked_until": 0.0, "last_failure": time.monotonic()}
+    )
 
 
-def _lockout_remaining(email: str) -> int:
-    entry = _throttle.get(email)
+def _lockout_remaining(store: dict[str, dict], key: str) -> int:
+    entry = store.get(key)
     if entry is None:
         return 0
     return max(0, int(entry["locked_until"] - time.monotonic()) + 1)
 
 
-def _record_login_failure(email: str) -> None:
-    entry = _throttle_entry(email)
+def _record_failure(store: dict[str, dict], key: str) -> None:
+    entry = _throttle_entry(store, key)
     entry["failures"] += 1
+    entry["last_failure"] = time.monotonic()
     if entry["failures"] >= LOCKOUT_THRESHOLD:
         # Clamp the exponent (not just the result): failures grows without
         # bound, and 2.0 ** ~1024 would raise OverflowError before min() ran.
@@ -55,9 +93,42 @@ def _record_login_failure(email: str) -> None:
         entry["locked_until"] = time.monotonic() + min(2.0**exponent, LOCKOUT_MAX_SECONDS)
 
 
-def _is_locked(email: str) -> bool:
-    entry = _throttle.get(email)
+def _is_locked(store: dict[str, dict], key: str) -> bool:
+    entry = store.get(key)
     return entry is not None and time.monotonic() < entry["locked_until"]
+
+
+# Public face of the re-auth throttle, for routes outside this module that ask
+# a logged-in user to re-enter their password (delete-account). Keyed by user
+# id and held in its own store — see the comment on `_reauth_throttle`.
+
+
+def password_lockout_seconds(user_id: str) -> int:
+    """Seconds until another re-auth attempt for this user is accepted, or 0
+    if one is allowed right now."""
+    if not _is_locked(_reauth_throttle, user_id):
+        # Guard, not a ternary: _lockout_remaining rounds up, so it returns 1
+        # for an entry that has already expired. Callers treat any non-zero
+        # value as "still locked out", so that 1 would be a phantom lockout.
+        return 0
+    return _lockout_remaining(_reauth_throttle, user_id)
+
+
+def record_password_failure(user_id: str) -> None:
+    _record_failure(_reauth_throttle, user_id)
+
+
+def clear_password_failures(user_id: str) -> None:
+    _reauth_throttle.pop(user_id, None)
+
+
+def clear_login_failures(email: str) -> None:
+    """Drop a deleted account's login-throttle entry. The key IS the email
+    address, and it survives until a successful login or an idle sweep, so
+    without this a deleted user's address sits in the worker's heap
+    indefinitely — against a privacy policy that promises the email is removed
+    immediately."""
+    _login_throttle.pop(normalize_email(email), None)
 
 
 def get_user_store() -> UserStore:
@@ -124,7 +195,13 @@ def home(request: Request):
     """Public landing page; logged-in users go straight to their conversions."""
     if request.session.get("user_id"):
         return RedirectResponse("/conversions", status_code=303)
-    return templates.TemplateResponse(request, "landing.html", {})
+    # delete-account lands here; it sets a one-shot session flag rather than a
+    # ?deleted=1 query param, so the confirmation can only appear for someone
+    # who actually just deleted an account. A crafted link must not be able to
+    # tell a stranger their account was deleted — that is a phishing opener.
+    return templates.TemplateResponse(
+        request, "landing.html", {"deleted": request.session.pop("account_deleted", False)}
+    )
 
 
 @router.get("/privacy")
@@ -154,7 +231,7 @@ def signup(
             request, "signup.html", {"error": message, "email": email}, status_code=status_code
         )
 
-    if "@" not in email or len(email) < 3 or len(email) > 254:
+    if "@" not in email or len(email) < 3 or len(email) > MAX_EMAIL_LENGTH:
         return error("Enter a valid email address.", 400)
     if len(password) < MIN_PASSWORD_LENGTH:
         return error(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.", 400)
@@ -179,13 +256,25 @@ def login_form(request: Request):
 @router.post("/login")
 def login(request: Request, email: str = Form(...), password: str = Form(...)):
     email = normalize_email(email)
-    if _is_locked(email):
+    if len(email) > MAX_EMAIL_LENGTH:
+        # The submitted email becomes a throttle dict key, so an unbounded one
+        # makes the entry size attacker-controlled (measured: 1 MiB keys, 500
+        # entries, 510 MB). signup() already caps at the same length, so no
+        # real account can have an address this long and rejecting it early
+        # leaks nothing that the generic 401 below doesn't.
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"error": "Incorrect email or password.", "email": ""},
+            status_code=401,
+        )
+    if _is_locked(_login_throttle, email):
         return templates.TemplateResponse(
             request,
             "login.html",
             {
                 "error": "Too many failed attempts — "
-                f"try again in {_lockout_remaining(email)}s.",
+                f"try again in {_lockout_remaining(_login_throttle, email)}s.",
                 "email": email,
             },
             status_code=429,
@@ -194,11 +283,11 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
     # Always verify against *some* hash so unknown emails take as long as
     # wrong passwords.
     if verify_password(password, user.password_hash if user else _DUMMY_HASH) and user:
-        _throttle.pop(email, None)
+        _login_throttle.pop(email, None)
         events.record_event(get_settings().data_dir, user.id, events.LOGIN)
         _login_session(request, user)
         return RedirectResponse("/conversions", status_code=303)
-    _record_login_failure(email)
+    _record_failure(_login_throttle, email)
     return templates.TemplateResponse(
         request,
         "login.html",

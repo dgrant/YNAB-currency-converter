@@ -43,7 +43,7 @@ def app_client_factory(tmp_path, monkeypatch):
 
         import app.auth as auth
 
-        auth._reset_throttle()  # login-throttle state is module-level
+        auth._reset_throttle()  # login + re-auth throttle state is module-level
 
         from app.main import create_app
 

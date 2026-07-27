@@ -99,6 +99,53 @@ class UserStore:
             conn.close()
         return _row_to_user(row) if row else None
 
+    def delete(self, user_id: str) -> bool:
+        """Delete a user and every row belonging to them. Returns True if the
+        user existed, False if there was nothing to delete (so the CLI can fail
+        loudly on a typo, same as set_admin_by_email).
+
+        Every per-user table is listed here explicitly rather than left to
+        ON DELETE CASCADE, and all of it runs in ONE transaction so a failure
+        can't leave an orphaned YNAB token behind: the cascade only fires while
+        `PRAGMA foreign_keys = ON` is set (db.connect sets it, but that is a
+        per-connection pragma, not a property of the schema), and a deletion
+        that half-happens is exactly the failure mode a data-deletion request
+        must not have. **Any NEW per-user table must be added to this method**,
+        or a deleted account will leave data behind.
+
+        That includes `events`. An earlier design kept those rows as an
+        "anonymous" activity log, but nothing can read them once the user row
+        is gone (`events.aggregate_by_user` selects FROM users), and
+        `events.detail` holds real YNAB account ids — so retaining them cost
+        privacy surface and bought nothing. The caller writes a single
+        account_deleted event *after* this returns; that dangling uuid plus a
+        date is all that survives, recording that a deletion happened without
+        recording whose.
+
+        After the commit it checkpoints the write-ahead log, which would
+        otherwise keep a pre-delete copy of the rows on disk. `secure_delete`
+        (db.connect) already zeroes the pages this DELETE frees, so no VACUUM
+        is needed here — and it must NOT run here: VACUUM rewrites the entire
+        database under an exclusive lock, and with open signup and a single
+        uvicorn worker, a loop of signup-then-delete would monopolize SQLite's
+        one writer slot. Compaction of pages freed *before* secure_delete
+        existed is a one-off maintenance job instead (`db.vacuum`, run by the
+        CLI and documented in DEPLOY.md).
+        """
+        conn = db.connect(self.data_dir)
+        try:
+            with conn:  # commits on success, rolls back on any exception
+                conn.execute("DELETE FROM conversions WHERE user_id = ?", (user_id,))
+                conn.execute("DELETE FROM ynab_connections WHERE user_id = ?", (user_id,))
+                conn.execute("DELETE FROM events WHERE user_id = ?", (user_id,))
+                cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            deleted = cur.rowcount > 0
+            if deleted:
+                db.checkpoint_wal(conn)
+            return deleted
+        finally:
+            conn.close()
+
     def set_refresh_on_load(self, user_id: str, enabled: bool) -> None:
         """Toggle the per-user 'refresh pending counts on page load' opt-in."""
         conn = db.connect(self.data_dir)

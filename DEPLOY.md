@@ -68,6 +68,48 @@ changes nothing — so the command errors loudly and exits non-zero on an
 unknown email rather than pretending to succeed. After granting, the account
 sees an "Admin" link on `/settings` and can open `/admin`.
 
+## Deleting a user account
+
+Users can delete their own account from **Settings → Delete account** (it asks
+for their password and takes effect immediately) — point emailed requests there
+first. To action a request yourself, e.g. when the person can no longer sign in,
+run it **inside the container** so it hits the live DB in the mounted volume:
+
+```bash
+docker compose exec app python -m app.delete_user them@example.com
+```
+
+It prints who it's about to delete and asks for confirmation; add `--yes` to
+skip the prompt (required with `docker compose exec -T`, which has no TTY). Like
+`set_admin`, it exits non-zero on an unknown email instead of pretending to
+succeed — and run on the host by mistake it would open a different, empty
+`data/app.db` and delete nothing.
+
+This deletes everything belonging to that account — email + password hash, YNAB
+OAuth tokens, conversion configs and activity-log rows. `PRAGMA secure_delete`
+zeroes those bytes as they're freed, and the CLI then VACUUMs to reclaim pages
+freed by *older* deletions (from before that pragma was turned on). One row
+survives: an `account_deleted` event carrying a dangling uuid and a date, so the
+log still shows a deletion happened without recording whose.
+
+The self-serve route deliberately does NOT vacuum — VACUUM rewrites the whole
+file under an exclusive lock, and with open signup on a single worker a
+signup/delete loop would monopolize SQLite's one writer. If you want to compact
+the live DB once (worth doing after this release, to clear pages freed before
+`secure_delete` existed), run it out of hours:
+
+```bash
+docker compose exec app python -c "from app.config import get_settings; from app import db; db.vacuum(get_settings().data_dir)"
+```
+
+Deletion cannot touch YNAB itself: transactions the app already converted keep
+their amounts and memos, and the OAuth grant is revoked by the user from
+YNAB → Account Settings → Security.
+
+One thing the app can't reach: if this account was migrated from v1 with
+`import_legacy`, `data/conversions.json.imported` still holds its budget/account
+ids. Check for that file and remove it by hand when honouring a request.
+
 ## Updating
 
 Auto-deploy (below) normally handles this. To update by hand:

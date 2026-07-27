@@ -6,3 +6,6 @@ __pycache__/
 .pytest_cache/
 .venv/
 .gstack/
+.coverage
+.coverage.*
+htmlcov/

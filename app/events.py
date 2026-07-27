@@ -1,5 +1,8 @@
-"""Append-only activity/audit log (the `events` table) + the per-user
-aggregates the /admin dashboard reads.
+"""Activity/audit log (the `events` table) + the per-user aggregates the
+/admin dashboard reads.
+
+Append-only in normal operation; the one exception is account deletion, which
+removes that user's rows wholesale (see `UserStore.delete`).
 
 This is a best-effort activity log, NOT a tamper-proof forensic record: an
 event insert is separate from the external YNAB write it accompanies (no shared
@@ -27,6 +30,12 @@ CONVERSION_UPDATED = "conversion_updated"
 CONVERSION_DELETED = "conversion_deleted"
 YNAB_CONNECTED = "ynab_connected"
 YNAB_DISCONNECTED = "ynab_disconnected"
+# Recorded *after* the user row and all their other events are gone — the only
+# row that outlives a deleted account. Its user_id is a dangling uuid that now
+# refers to nobody; `detail` says who did it ("self" or "admin"), never the
+# email, which is precisely what the deletion removed. Keep it that way: this
+# row exists to show a deletion happened, not to show whose.
+ACCOUNT_DELETED = "account_deleted"
 
 
 def record_event(
@@ -46,11 +55,29 @@ def record_event(
     try:
         conn = db.connect(data_dir)
         try:
-            conn.execute(
-                "INSERT INTO events (id, user_id, event_type, count, detail) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (uuid.uuid4().hex, user_id, event_type, count, detail),
-            )
+            event_id = uuid.uuid4().hex
+            if user_id is None or event_type == ACCOUNT_DELETED:
+                # A failed-login event has no user, and account_deleted is the
+                # deliberate orphan written *after* the row is gone.
+                conn.execute(
+                    "INSERT INTO events (id, user_id, event_type, count, detail) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (event_id, user_id, event_type, count, detail),
+                )
+            else:
+                # Every other event is recorded on its own connection AFTER the
+                # action it describes has committed. If the account is deleted in
+                # that window (two tabs: one applying, one deleting), an
+                # unconditional INSERT lands a row for a user who no longer
+                # exists — and conversion events carry a real YNAB account id in
+                # `detail`, so it outlives the account forever and falsifies the
+                # privacy policy. `events` has no FK to lean on (see db.SCHEMA),
+                # so make the insert itself conditional.
+                conn.execute(
+                    "INSERT INTO events (id, user_id, event_type, count, detail) "
+                    "SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM users WHERE id = ?)",
+                    (event_id, user_id, event_type, count, detail, user_id),
+                )
             conn.commit()
         finally:
             conn.close()

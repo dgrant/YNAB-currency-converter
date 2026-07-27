@@ -3,7 +3,7 @@
 {% block content %}
 <div class="prose">
   <h1>Privacy Policy</h1>
-  <p class="hint">Last updated: 2026-07-06</p>
+  <p class="hint">Last updated: 2026-07-27</p>
 
   <p>
     This app helps you convert foreign-currency transactions in your YNAB plan
@@ -27,6 +27,17 @@
       <strong>Your conversion settings.</strong> The YNAB plan and account you
       chose, the source currency, and the start date — the configuration needed
       to build a preview.
+    </li>
+    <li>
+      <strong>A record of your activity.</strong> When you sign in, connect or
+      disconnect YNAB, change a conversion, or apply one, the app records that
+      it happened: the type of action, the time, how many transactions were
+      converted, an internal identifier for your account, and — for actions on a
+      particular account — the YNAB identifier of the plan or account involved.
+      It is used to keep the app working and to see how much it is being used.
+      It never contains a transaction's amount, payee, or memo, and never a
+      password or token. It is deleted with the rest of your data when you
+      delete your account.
     </li>
   </ul>
 
@@ -70,8 +81,19 @@
     long as you keep your account. Transaction data is never retained — it lives
     only in memory for the duration of a single request (see “What we do not
     store” above). When you disconnect YNAB from the Settings page, the stored
-    access and refresh tokens are deleted immediately. When you ask us to delete
-    your account (see below), your account and all associated data are removed.
+    access and refresh tokens are deleted immediately. You can delete your
+    account yourself at any time from the Settings page — this immediately and
+    permanently removes your email address, password hash, YNAB tokens,
+    conversion settings, and activity history from the database, and overwrites
+    the space they occupied rather than leaving it readable. The only thing kept
+    is a dated note that <em>an</em> account was deleted, which records nothing
+    about who it belonged to.
+  </p>
+  <p>
+    Deleting your account does not change anything in YNAB itself: transactions
+    this app already converted keep their amounts and memos. It also cannot
+    revoke this app's authorization on YNAB's side — you can do that from
+    YNAB &rarr; Account Settings &rarr; Security.
   </p>
 
   <h2>Changes to this policy</h2>
@@ -90,8 +112,11 @@
       <a href="https://app.ynab.com/settings" rel="noopener">account settings</a>.
     </li>
     <li>
-      To delete your account and associated data, email
-      <a href="mailto:davidgrant@gmail.com">davidgrant@gmail.com</a>.
+      You can delete your account and all associated data yourself from the
+      Settings page (“Delete account”); it takes effect immediately. If you
+      would rather we do it for you, or you can no longer sign in, email
+      <a href="mailto:davidgrant@gmail.com">davidgrant@gmail.com</a> and we
+      will delete it for you.
     </li>
   </ul>
 

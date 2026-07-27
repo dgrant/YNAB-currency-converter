@@ -30,12 +30,15 @@ app/
   rates.py           # FrankfurterClient + RateTable (business-day fallback)
   convert.py         # core: filter unconverted, compute amounts/memos
   import_legacy.py   # one-shot v1 migration: python -m app.import_legacy <email>
+  delete_user.py     # CLI for deletion requests: python -m app.delete_user <email>
   routes/conversions.py  # list / new / edit / delete / bulk-delete / detail
                          #   preview / apply (single) + preview-all / apply-all
                          #   (grouped dashboard flow); all scoped by user
                          #   (_build_group / _parse_updates / _apply_updates
                          #    are shared by the single and all-accounts paths)
-  routes/settings.py     # /settings: OAuth start/callback, disconnect
+  routes/settings.py     # /settings: OAuth start/callback, disconnect,
+                         #   pending-count opt-in, delete-account (re-auths
+                         #   with the current password)
   templates/ static/
 tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.py is the full HTTP flow
 ```
@@ -67,7 +70,10 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
   the `User` and every store call is scoped by `user.id` — never query
   conversions or connections without it. `auth.py` remains the swap point for
   Google Sign-In later (an OIDC flow would set the same `user_id` session
-  key). `/login` is brute-force throttled per email (in-memory, module state).
+  key). `/login` is brute-force throttled per email (in-memory, module state);
+  `auth.py` keeps a *second*, separate store for re-auth (delete-account),
+  keyed by user id — see the comment there for why merging the two hands a
+  stranger a lockout.
 - **Per-user YNAB credentials** — each user connects on `/settings` via OAuth
   ("Connect to YNAB", available only when `YNAB_CLIENT_ID/SECRET` are set).
   OAuth is the only connection type — the personal-access-token path was
@@ -77,6 +83,51 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
   row (from before removal) has no refresh token, so it's deleted on next
   access and the user re-connects via OAuth. Routes that need YNAB use the
   `require_ynab` dependency, which 303s to `/settings` when unconnected.
+- **Account deletion is one place** — `UserStore.delete(user_id)` deletes every
+  per-user row (conversions, `ynab_connections`, `events`, the user) in a
+  single transaction, explicitly rather than via `ON DELETE CASCADE` (the
+  cascade only fires while the per-connection `foreign_keys` pragma is on).
+  **Any new per-user table must be added to it**, or a deleted account leaves
+  data behind. `events` included: an earlier design kept those rows as an
+  "anonymous" activity log, but nothing can read them once the user row is gone
+  (`aggregate_by_user` selects `FROM users`) and `events.detail` holds real
+  YNAB account ids, so keeping them was privacy surface with no reader. The
+  caller then records one `ACCOUNT_DELETED` event — a dangling uuid and a date,
+  showing that a deletion happened, not whose. `PRAGMA secure_delete`
+  (`db.connect`) zeroes those pages as they're freed, and `delete()` then
+  checkpoints the WAL via `db.checkpoint_wal`. That helper **checks the
+  returned `busy` flag** and retries — `PRAGMA wal_checkpoint(TRUNCATE)`
+  doesn't raise when a reader blocks it, it returns `(busy, …)`, and treating
+  that as success is how a deletion gets reported as permanent while the rows
+  are still on disk — in `app.db` itself for any row old enough to have
+  been checkpointed, which is every real user (a fresh test DB puts them in
+  `app.db-wal` instead, which is why the residue test reads both). It never
+  raises and its callers treat it as
+  best-effort (the rows are already gone); a checkpoint that stays busy is
+  logged at ERROR rather than failing the request.
+  VACUUM is deliberately NOT on the request path (it rewrites the file under an
+  exclusive lock; with open signup on a single worker, a signup/delete loop
+  would monopolize the one writer slot) — it lives in `db.vacuum`, called by the
+  CLI and documented in DEPLOY.md. Two entry points, both routing through
+  `delete()`: the user's own `POST /settings/delete-account` (re-authenticates
+  with the current password — a session cookie alone must not destroy an
+  account — throttled per user id via `auth.password_lockout_seconds` /
+  `record_password_failure` / `clear_password_failures`, backed by a
+  `_reauth_throttle` dict **separate from** `/login`'s email-keyed one: any
+  shared counter, even a namespaced key in the same dict, is reachable by an
+  anonymous visitor POSTing /login and lets a stranger lock the owner out of
+  deleting their own account) and `python -m app.delete_user <email>` for
+  emailed deletion requests. Deleting the tokens does not revoke the YNAB grant
+  (YNAB has no revocation endpoint) — the UI and privacy policy both say so.
+- **A deletion must stop work already in flight** — a request authenticated
+  before the delete still holds a `YNABClient` and a conversion snapshot, and
+  the app's core promise is that it never writes to a budget the user was told
+  is gone. Two guards, both of which exist for this: `_apply_updates` raises
+  `ConversionGoneError` when the row has vanished under its lock (it must never
+  fall back to the pre-lock snapshot), and `ConnectionStore._upsert` raises
+  `ConnectionGoneError` on the users FK violation so `oauth.get_access_token`
+  turns it into a 401 rather than returning a token it could not persist. Any
+  new long-running per-user operation needs the same treatment.
 - **CSRF** — every POST form must include `{{ csrf_input(request) }}`
   (template global in `templates.py`); `verify_csrf` is a dependency on both
   routers and 403s POSTs without the session's token. Remember this when

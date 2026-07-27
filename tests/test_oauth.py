@@ -109,6 +109,40 @@ def test_oauth_callback_denied_is_flash_not_error(oauth_client):
     assert "cancelled or denied" in oauth_client.get("/settings?error=denied").text
 
 
+@respx.mock
+def test_oauth_callback_aborts_when_the_account_was_deleted_mid_flow(
+    oauth_client, tmp_path, monkeypatch
+):
+    """The delete-mid-OAuth race: the token write hits the users foreign key,
+    which must abort cleanly rather than surface as a 500. Without this the
+    whole try/except can be deleted and the suite stays green."""
+    from app.connections import ConnectionStore as Store
+
+    respx.post(f"{OAUTH}/oauth/token").mock(
+        return_value=Response(200, json={
+            "access_token": "a", "refresh_token": "r", "expires_in": 7200,
+        })
+    )
+    signup(oauth_client)
+    state = start_and_get_state(oauth_client)
+    user = UserStore(tmp_path).get_by_email("user@example.com")
+    real_set_oauth = Store.set_oauth
+
+    def delete_then_store(self, user_id, *args, **kwargs):
+        UserStore(tmp_path).delete(user_id)  # account vanishes mid-request
+        return real_set_oauth(self, user_id, *args, **kwargs)
+
+    monkeypatch.setattr(Store, "set_oauth", delete_then_store)
+
+    response = oauth_client.get(
+        f"/oauth/ynab/callback?code=c&state={state}", follow_redirects=False
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/"
+    assert Store(tmp_path).get(user.id) is None  # no token was stored
+
+
 # --- get_access_token unit tests -------------------------------------------
 
 

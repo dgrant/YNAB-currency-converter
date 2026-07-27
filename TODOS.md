@@ -207,6 +207,33 @@ this kind of swap-in.
 
 ## Correctness & robustness
 
+### An apply already past its check can still PATCH a deleted account's budget
+
+**What:** Make account deletion and the apply's fetch→filter→PATCH section
+take the same user-scoped lock, so a delete can't land in the middle of an
+apply that has already cleared its existence check.
+
+**Why:** `_apply_updates` raises `ConversionGoneError` when the conversion row
+has vanished (`app/routes/conversions.py:870`), but that check runs *before*
+`ynab.get_transactions` and the category fetch — a network round trip — and the
+PATCH is at `:929`. Delete the account inside that window and the write still
+lands, after the user has been shown the deletion confirmation. Found
+independently by the round-5 adversarial pass (graded INVESTIGATE) and by
+`/codex challenge` before the v0.6.0.0 merge; two models converging is why it
+is P1 rather than deferred a third time.
+
+**Context:** The existing guard narrowed the window from "the whole apply" to
+"one YNAB round trip", so this is a real but small remainder. A second
+existence check just before the PATCH would shrink it again without closing it
+— the fix is a shared lock, or a per-user generation counter re-checked
+immediately before `update_transactions`. Note the current test
+(`tests/test_account_deletion.py:700`) deletes *before* `_apply_updates` starts,
+so it does not cover this window; the fix needs a test that deletes after the
+existence check.
+
+**Effort:** M
+**Priority:** P1
+
 ### Cap or chunk large previews / applies
 
 **What:** Bound the work a single preview/apply does when a conversion's
@@ -273,6 +300,29 @@ lines and the preview→approve safety net makes it low-risk.
 **Priority:** P3
 
 ## Ops / deployment
+
+### A failed deploy is stamped as done and never retried
+
+**What:** Move the `.last-deployed` write in `deploy/autodeploy.sh` to *after*
+the health check passes, and roll back to the previous image when it doesn't.
+
+**Why:** The stamp is written at `deploy/autodeploy.sh:54`, immediately after
+`docker compose up -d --build` and before the `/healthz` poll at `:56`. If the
+container fails to start, the stamp already equals the remote SHA, so the next
+cron run exits at `:25` (`[ "$deployed_sha" = "$remote_sha" ] && exit 0`). The
+failure is logged as a WARNING and then nothing retries — the site stays down
+on the old container (or down entirely) until someone reads `~/autodeploy.log`.
+Auto-deploy silently becomes deploy-once-and-hope.
+
+**Context:** Found by `/codex challenge` before the v0.6.0.0 merge and confirmed
+by reading the script. The health poll and the SHA-label check already exist and
+work; only the ordering is wrong. Rollback is the larger half — `docker compose`
+alone doesn't keep the previous image tagged, so it needs either a tagged
+previous image or a `git checkout` of the prior SHA plus a rebuild. Splitting
+the ordering fix (small, high value) from the rollback (larger) is reasonable.
+
+**Effort:** M
+**Priority:** P1
 
 ### Rotate the YNAB OAuth client secret
 
@@ -388,6 +438,62 @@ only worth doing if usage actually grows past friends-and-family scale.
 ---
 
 ## Completed
+
+### Delete a user account and all its data
+**(Features / Security — the multi-user follow-up, and a real deletion request)**
+
+Done (2026-07-27, branch `claude/user-account-deletion-4n74qr`), prompted by a
+user emailing to ask for their account to be deleted while the YNAB OAuth App
+Review was in flight. One store method, `UserStore.delete(user_id)`, deletes
+conversions + `ynab_connections` + `events` + the user row in a single
+transaction — explicitly rather than via `ON DELETE CASCADE`, since the cascade
+only fires while the per-connection `foreign_keys` pragma is on, and a
+half-completed deletion is the one failure mode a deletion request can't have.
+`events` rows were kept in the first draft as an "anonymous" activity log;
+`/review` killed that (nothing can read a deleted user's rows, since
+`aggregate_by_user` selects `FROM users`, and `events.detail` holds real YNAB
+account ids — privacy surface with no reader), so they now go with the account
+and a single `ACCOUNT_DELETED` row survives as a dated marker that a deletion
+happened. The same review caught that SQLite leaves deleted bytes readable in
+free pages: `PRAGMA secure_delete` plus a WAL checkpoint make the privacy
+policy's "permanently removes" true, verified by a test that greps the raw DB
+file for the email, YNAB account id and token. A follow-up `/codex challenge`
+(cross-model, after Codex was unblocked) then found three problems in those
+fixes: the post-delete `VACUUM` was a denial-of-service on the request path
+(rewrites the whole file under an exclusive lock; open signup + one worker =
+a signup/delete loop monopolizes SQLite's single writer), so compaction moved
+to `db.vacuum` in the CLI; `PRAGMA wal_checkpoint(TRUNCATE)` returns a `busy`
+flag instead of raising, so ignoring it let a concurrent reader leave the
+deleted rows in `app.db-wal` while the app reported permanent deletion; and
+sharing `/login`'s per-email throttle handed any anonymous visitor a way to
+lock the owner out of deleting their own account, so re-auth is now keyed by
+user id. Codex also sharpened the in-flight-work race the first review graded
+cosmetic: `_apply_updates` fell back to its pre-lock snapshot when the row
+vanished and PATCHed anyway, so an apply could write to a YNAB budget *after*
+the deletion confirmation — it now raises `ConversionGoneError`, and a token
+refresh that loses the same race aborts instead of continuing with a token it
+couldn't persist. Two entry points, both through that method: self-serve
+`POST /settings/delete-account`, which re-authenticates with the current
+password (a session cookie alone must not be able to destroy an account), and
+shows its confirmation via a one-shot session flag rather than a `?deleted=1`
+param a crafted link could fake; and
+`docker compose exec app python -m app.delete_user <email>` for emailed
+requests (confirmation prompt, `--yes` for non-TTY, non-zero exit on an unknown
+email — same shape as `set_admin`). Deleting tokens does *not* revoke the YNAB
+grant (YNAB has no revocation endpoint), so both the UI and the privacy policy
+point at YNAB → Account Settings → Security; the policy now documents
+self-serve deletion, the one dated marker that survives, and that YNAB data
+already converted is untouched. Tests: `tests/test_account_deletion.py`
+(row-level completeness, nothing recoverable in the raw DB file, other users
+unaffected, transaction rollback on a mid-delete failure, no VACUUM on the
+request path, a busy checkpoint reported rather than swallowed, apply aborting
+instead of PATCHing after a delete, token refresh aborting on the same race,
+wrong / empty / missing password, per-user throttling that a stranger can't
+trip, missing CSRF and anonymous POSTs rejected, logged out + can't log back
+in, one-shot confirmation, email freed for re-signup, CLI happy path + unknown
+email + compaction + every `_confirm` branch).
+
+**Completed:** v0.6.0.0 (2026-07-27)
 
 ### Admin dashboard, per-user metrics, and an activity/audit log
 **(Ops / deployment — closes "Audit log", "Per-user metrics", "Admin interface")**
@@ -648,9 +754,9 @@ Done (2026-07): email+password signup like rmillan's, per-user YNAB
 credentials (OAuth — the PAT path was removed 2026-07), conversions scoped
 by `user_id`, all in SQLite (`data/app.db` — users, ynab_connections,
 conversions). `python -m app.import_legacy <email>` migrates a v1
-deployment. Follow-ups worth considering: account deletion (password reset
-is now its own task above) and signup abuse controls if it's ever opened up
-beyond friends & family.
+deployment. Account deletion landed 2026-07 (see below). Follow-ups worth
+considering: password reset (its own task above) and signup abuse controls if
+it's ever opened up beyond friends & family.
 
 **Completed:** 2026-07
 

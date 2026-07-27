@@ -115,9 +115,9 @@ def test_throttle_delay_never_overflows():
     import app.auth as auth
 
     auth._reset_throttle()
-    auth._throttle["x@example.com"] = {"failures": 5000, "locked_until": 0.0}
-    auth._record_login_failure("x@example.com")  # must not raise OverflowError
-    remaining = auth._throttle["x@example.com"]["locked_until"] - time_mod.monotonic()
+    auth._login_throttle["x@example.com"] = {"failures": 5000, "locked_until": 0.0}
+    auth._record_failure(auth._login_throttle, "x@example.com")  # must not raise OverflowError
+    remaining = auth._login_throttle["x@example.com"]["locked_until"] - time_mod.monotonic()
     assert remaining <= auth.LOCKOUT_MAX_SECONDS + 1
     auth._reset_throttle()
 
@@ -145,14 +145,14 @@ def test_login_brute_force_throttled_per_email(app_client):
     )
     assert response.status_code == 401
     # once the lockout expires, the correct password works and resets the counter
-    auth._throttle[EMAIL]["locked_until"] = 0.0
+    auth._login_throttle[EMAIL]["locked_until"] = 0.0
     response = app_client.post(
         "/login",
         data={"email": EMAIL, "password": PASSWORD, "csrf_token": token},
         follow_redirects=False,
     )
     assert response.status_code == 303
-    assert EMAIL not in auth._throttle
+    assert EMAIL not in auth._login_throttle
 
 
 def test_settings_connect_and_disconnect(app_client):

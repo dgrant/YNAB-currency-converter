@@ -54,6 +54,22 @@
   </form>
 </div>
 
+<div class="card">
+  <h2>Delete account</h2>
+  <p class="hint">Permanently deletes your account, your YNAB connection, and
+     every conversion you've configured here. This can't be undone. Your YNAB
+     plan itself is untouched — transactions already converted keep their
+     amounts and memos.</p>
+  <form method="post" action="/settings/delete-account"
+        onsubmit="return confirm('Permanently delete your account and all its data? This cannot be undone.')">
+    {{ csrf_input(request) }}
+    <label for="delete-password">Confirm your password</label>
+    <input type="password" id="delete-password" name="password"
+           autocomplete="current-password" required>
+    <button type="submit" class="link danger">Delete my account</button>
+  </form>
+</div>
+
 {% if user.is_admin %}
 <div class="card">
   <h2>Admin</h2>

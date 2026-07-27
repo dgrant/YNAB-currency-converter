@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Currency Converter for YNAB — date-accurate multi-currency{% endblock %}
 {% block content %}
+{% if deleted %}
+<p class="flash">Your account has been deleted, along with your YNAB
+   connection and conversion settings. Nothing in your YNAB plan was changed —
+   any conversions already applied there stay as they are. You can also revoke
+   this app's access from YNAB &rarr; Account Settings &rarr; Security.</p>
+{% endif %}
 <div class="hero">
   <h1>Spend in any currency.<br>Budget in yours.</h1>
   <p class="lede">

@@ -1,8 +1,20 @@
 """Per-user YNAB OAuth credentials (access token + refresh token)."""
+import logging
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import db
+
+logger = logging.getLogger("ynabfx")
+
+
+class ConnectionGoneError(Exception):
+    """Storing a token failed because the user no longer exists — the account
+    was deleted while this request was refreshing. The caller must abort
+    rather than carry on with a token it could not persist (see
+    oauth.get_access_token); continuing would let a request keep reading and
+    writing the YNAB budget of an account already reported as deleted."""
 
 
 @dataclass(frozen=True)
@@ -70,5 +82,14 @@ class ConnectionStore:
                 (user_id, kind, access_token, refresh_token, expires_at),
             )
             conn.commit()
+        except sqlite3.IntegrityError as exc:
+            # The only constraint reachable here is the FK to users: the account
+            # was deleted while this request was refreshing its token. Storing
+            # the token is exactly what must NOT happen — but neither may we
+            # return normally, because the caller would then go on using a live
+            # access token for a deleted account. Signal it so the request
+            # stops; the raw IntegrityError would surface as a 500.
+            logger.info("Dropped a YNAB token for a user deleted mid-request")
+            raise ConnectionGoneError(user_id) from exc
         finally:
             conn.close()

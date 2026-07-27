@@ -4,12 +4,12 @@ import secrets
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-from .. import events, oauth
+from .. import auth, events, oauth
 from ..auth import get_user_store, require_login
 from ..config import get_settings
-from ..connections import ConnectionStore
+from ..connections import ConnectionGoneError, ConnectionStore
 from ..templates import templates
-from ..users import User
+from ..users import User, verify_password
 
 router = APIRouter(dependencies=[Depends(require_login)])
 
@@ -30,6 +30,11 @@ _ERRORS = {
     "likely revoked from YNAB's settings, or the token expired). Please reconnect.",
 }
 
+WRONG_PASSWORD_ERROR = (
+    "That password is incorrect — your account was not deleted. Enter your "
+    "current password to confirm."
+)
+
 
 def get_connection_store() -> ConnectionStore:
     return ConnectionStore(get_settings().data_dir)
@@ -42,8 +47,12 @@ def _redirect_uri(request: Request) -> str:
     return str(request.url_for("oauth_callback"))
 
 
-@router.get("/settings")
-def settings_page(request: Request, user: User = Depends(require_login)):
+def _settings_response(
+    request: Request, user: User, *, error: str | None = None, status_code: int = 200
+):
+    """Render /settings. `error` overrides the ?error= flash so a failed POST
+    (e.g. the wrong password on delete-account) can re-render in place instead
+    of redirecting the message through the URL."""
     connection = get_connection_store().get(user.id)
     return templates.TemplateResponse(
         request,
@@ -52,10 +61,16 @@ def settings_page(request: Request, user: User = Depends(require_login)):
             "user": user,
             "connection": connection,
             "oauth_configured": oauth.is_configured(get_settings()),
-            "flash": _FLASHES.get(str(request.query_params.get("ok"))),
-            "error": _ERRORS.get(str(request.query_params.get("error"))),
+            "flash": None if error else _FLASHES.get(str(request.query_params.get("ok"))),
+            "error": error or _ERRORS.get(str(request.query_params.get("error"))),
         },
+        status_code=status_code,
     )
+
+
+@router.get("/settings")
+def settings_page(request: Request, user: User = Depends(require_login)):
+    return _settings_response(request, user)
 
 
 @router.post("/settings/ynab/disconnect")
@@ -77,6 +92,60 @@ def set_refresh_on_load(
     return RedirectResponse(
         f"/settings?ok={'refresh_on' if on else 'refresh_off'}", status_code=303
     )
+
+
+@router.post("/settings/delete-account")
+def delete_account(
+    request: Request,
+    user: User = Depends(require_login),
+    password: str = Form(default=""),
+):
+    """Permanently delete the logged-in user's account and all their data.
+
+    Re-authenticates with the current password first: the session cookie alone
+    shouldn't be enough to destroy an account (a borrowed/unlocked browser
+    otherwise suffices), and unlike disconnect this is not undoable. A wrong
+    password re-renders /settings with an error and changes nothing.
+
+    Deleting the stored OAuth tokens does NOT revoke the grant on YNAB's side —
+    YNAB has no token-revocation endpoint — so the confirmation points the user
+    at YNAB's own security settings, same as Disconnect does.
+
+    Attempts are throttled, or this form is an unthrottled oracle for guessing
+    the password of a session someone else's browser left logged in. The
+    counter is keyed by user id and lives in its own store, NOT /login's
+    email-keyed one: a shared counter would let any anonymous visitor lock the
+    owner out of deleting their own account (see app/auth.py).
+    """
+    locked_for = auth.password_lockout_seconds(user.id)
+    if locked_for:
+        return _settings_response(
+            request,
+            user,
+            error=f"Too many failed attempts — try again in {locked_for}s.",
+            status_code=429,
+        )
+    if not verify_password(password, user.password_hash):
+        auth.record_password_failure(user.id)
+        return _settings_response(request, user, error=WRONG_PASSWORD_ERROR, status_code=403)
+    auth.clear_password_failures(user.id)
+    # Gate the marker on the delete actually removing a row: a double-submit
+    # (two tabs, or an impatient second click) otherwise records the deletion
+    # twice for one account, and the row exists to count deletions. The user
+    # still gets the confirmation either way — the account is gone.
+    if get_user_store().delete(user.id):
+        # Recorded after the delete, so a failure there leaves no "deleted" row
+        # for a live account. This is the one row that outlives the user: a
+        # dangling uuid and a date, recording that a deletion happened, not whose.
+        events.record_event(
+            get_settings().data_dir, user.id, events.ACCOUNT_DELETED, detail="self"
+        )
+    auth.clear_login_failures(user.email)
+    # clear() first, then the flag: the confirmation is a one-shot session
+    # value, so a crafted URL can't show a stranger "your account was deleted".
+    request.session.clear()
+    request.session["account_deleted"] = True
+    return RedirectResponse("/", status_code=303)
 
 
 @router.get("/oauth/ynab/start")
@@ -111,6 +180,13 @@ def oauth_callback(
         tokens = oauth.exchange_code(settings, code, _redirect_uri(request))
     except oauth.OAuthGrantError:
         return RedirectResponse("/settings?error=denied", status_code=303)
-    oauth.save_token_response(get_connection_store(), user.id, tokens)
+    try:
+        oauth.save_token_response(get_connection_store(), user.id, tokens)
+    except ConnectionGoneError:
+        # The account was deleted between require_login and the token write.
+        # No token was stored; send them to the landing page rather than let
+        # the FK error surface as a 500 (get_access_token handles the same
+        # race the same way).
+        return RedirectResponse("/", status_code=303)
     events.record_event(get_settings().data_dir, user.id, events.YNAB_CONNECTED)
     return RedirectResponse("/settings?ok=connected", status_code=303)

@@ -10,7 +10,7 @@ import urllib.parse
 import httpx
 
 from .config import Settings
-from .connections import ConnectionStore, YNABConnection
+from .connections import ConnectionGoneError, ConnectionStore, YNABConnection
 from .ynab import YNABError
 
 # Refresh this long before the token actually expires, so a token that is
@@ -19,8 +19,9 @@ REFRESH_MARGIN_SECONDS = 60
 
 # Serializes refreshes per user (routes are sync, so requests interleave
 # across FastAPI's threadpool). Keyed by user_id and never evicted — bounded
-# by the real user count, not by attacker-controlled input like the login
-# throttle is.
+# by the number of users who have ever connected YNAB (deleting an account
+# leaves its entry behind), not by attacker-controlled input like the login
+# throttle is. A bare Lock per departed user is small enough to leave alone.
 _refresh_locks: dict[str, threading.Lock] = {}
 _refresh_locks_guard = threading.Lock()
 
@@ -126,6 +127,10 @@ def get_access_token(settings: Settings, store: ConnectionStore, user_id: str) -
     deleted so the UI returns to the "connect" state. Transient failures
     bubble up as YNABError (friendly 502) without touching the stored tokens.
 
+    If the account is deleted between the refresh and the token write, the
+    resulting ConnectionGoneError becomes a 401 YNABError so the request
+    aborts rather than continuing with a token that was never persisted.
+
     Refreshing is serialized per user: YNAB rotates the refresh token on use,
     so two concurrent requests racing to refresh the same stale token would
     otherwise have the loser's refresh rejected and delete the connection the
@@ -159,5 +164,16 @@ def get_access_token(settings: Settings, store: ConnectionStore, user_id: str) -
                 return current.access_token
             store.delete(user_id)
             return None
-        save_token_response(store, user_id, tokens)
+        try:
+            save_token_response(store, user_id, tokens)
+        except ConnectionGoneError as exc:
+            # The account was deleted while we were refreshing. Do not return
+            # the token: this request would otherwise keep operating on the
+            # YNAB budget of an account the user has been told is gone. A 401
+            # is the existing "reconnect" path, and its handler redirects to
+            # /settings, where require_login bounces the dead session to
+            # /login. Nothing has been written to YNAB at this point.
+            raise YNABError(
+                "This account no longer exists", status_code=401
+            ) from exc
         return str(tokens["access_token"])
