@@ -60,6 +60,26 @@ def _is_locked(email: str) -> bool:
     return entry is not None and time.monotonic() < entry["locked_until"]
 
 
+# Public face of the throttle, for routes outside this module that also check a
+# password. Every such route must share ONE counter per email: a re-auth prompt
+# with its own (or no) limit is a way to guess the same password without ever
+# tripping the lockout /login enforces.
+
+
+def password_lockout_seconds(email: str) -> int:
+    """Seconds until another password attempt for this email is accepted, or 0
+    if one is allowed right now."""
+    return _lockout_remaining(email) if _is_locked(email) else 0
+
+
+def record_password_failure(email: str) -> None:
+    _record_login_failure(email)
+
+
+def clear_password_failures(email: str) -> None:
+    _throttle.pop(email, None)
+
+
 def get_user_store() -> UserStore:
     return UserStore(get_settings().data_dir)
 
@@ -124,10 +144,12 @@ def home(request: Request):
     """Public landing page; logged-in users go straight to their conversions."""
     if request.session.get("user_id"):
         return RedirectResponse("/conversions", status_code=303)
-    # ?deleted=1 is where delete-account lands (the session is gone by then, so
-    # the confirmation can't be shown on a logged-in page).
+    # delete-account lands here; it sets a one-shot session flag rather than a
+    # ?deleted=1 query param, so the confirmation can only appear for someone
+    # who actually just deleted an account. A crafted link must not be able to
+    # tell a stranger their account was deleted — that is a phishing opener.
     return templates.TemplateResponse(
-        request, "landing.html", {"deleted": request.query_params.get("deleted") == "1"}
+        request, "landing.html", {"deleted": request.session.pop("account_deleted", False)}
     )
 
 

@@ -19,8 +19,9 @@ REFRESH_MARGIN_SECONDS = 60
 
 # Serializes refreshes per user (routes are sync, so requests interleave
 # across FastAPI's threadpool). Keyed by user_id and never evicted — bounded
-# by the real user count, not by attacker-controlled input like the login
-# throttle is.
+# by the number of users who have ever connected YNAB (deleting an account
+# leaves its entry behind), not by attacker-controlled input like the login
+# throttle is. A bare Lock per departed user is small enough to leave alone.
 _refresh_locks: dict[str, threading.Lock] = {}
 _refresh_locks_guard = threading.Lock()
 

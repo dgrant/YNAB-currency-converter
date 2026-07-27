@@ -1,8 +1,12 @@
 """Per-user YNAB OAuth credentials (access token + refresh token)."""
+import logging
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import db
+
+logger = logging.getLogger("ynabfx")
 
 
 @dataclass(frozen=True)
@@ -70,5 +74,12 @@ class ConnectionStore:
                 (user_id, kind, access_token, refresh_token, expires_at),
             )
             conn.commit()
+        except sqlite3.IntegrityError:
+            # The only constraint reachable here is the FK to users: the account
+            # was deleted while this request was refreshing its token. Storing
+            # the new token is exactly what must NOT happen, so treat it as a
+            # no-op rather than letting it escape as a 500 — the next request
+            # from that (now dead) session gets bounced to /login anyway.
+            logger.info("Dropped a YNAB token for a user deleted mid-request")
         finally:
             conn.close()

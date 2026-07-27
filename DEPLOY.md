@@ -85,12 +85,17 @@ skip the prompt (required with `docker compose exec -T`, which has no TTY). Like
 succeed — and run on the host by mistake it would open a different, empty
 `data/app.db` and delete nothing.
 
-This deletes the user's email + password hash, their YNAB OAuth tokens, and
-their conversion configs. It keeps the anonymous `events` rows (opaque user id,
-event type, timestamp, count — no personal data, and nothing left to link them
-to a person). It cannot touch YNAB itself: transactions the app already
-converted keep their amounts and memos, and the OAuth grant is revoked by the
-user from YNAB → Account Settings → Security.
+This deletes everything belonging to that account — email + password hash, YNAB
+OAuth tokens, conversion configs and activity-log rows — then VACUUMs so the
+bytes aren't left readable in the database's free pages. One row survives: an
+`account_deleted` event carrying a dangling uuid and a date, so the log still
+shows a deletion happened without recording whose. It cannot touch YNAB itself:
+transactions the app already converted keep their amounts and memos, and the
+OAuth grant is revoked by the user from YNAB → Account Settings → Security.
+
+One thing the app can't reach: if this account was migrated from v1 with
+`import_legacy`, `data/conversions.json.imported` still holds its budget/account
+ids. Check for that file and remove it by hand when honouring a request.
 
 ## Updating
 

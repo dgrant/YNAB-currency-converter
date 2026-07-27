@@ -27,10 +27,11 @@ CONVERSION_UPDATED = "conversion_updated"
 CONVERSION_DELETED = "conversion_deleted"
 YNAB_CONNECTED = "ynab_connected"
 YNAB_DISCONNECTED = "ynab_disconnected"
-# Recorded *after* the user row is gone — the events table has no FK to users
-# (see db.SCHEMA), so this row survives as the record that the deletion
-# happened. `detail` carries who deleted it ("self" or "admin"), never the
-# email, which is precisely what the deletion removed.
+# Recorded *after* the user row and all their other events are gone — the only
+# row that outlives a deleted account. Its user_id is a dangling uuid that now
+# refers to nobody; `detail` says who did it ("self" or "admin"), never the
+# email, which is precisely what the deletion removed. Keep it that way: this
+# row exists to show a deletion happened, not to show whose.
 ACCOUNT_DELETED = "account_deleted"
 
 

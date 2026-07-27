@@ -395,26 +395,36 @@ only worth doing if usage actually grows past friends-and-family scale.
 Done (2026-07-27, branch `claude/user-account-deletion-4n74qr`), prompted by a
 user emailing to ask for their account to be deleted while the YNAB OAuth App
 Review was in flight. One store method, `UserStore.delete(user_id)`, deletes
-conversions + `ynab_connections` + the user row in a single transaction —
-explicitly rather than via `ON DELETE CASCADE`, since the cascade only fires
-while the per-connection `foreign_keys` pragma is on, and a half-completed
-deletion is the one failure mode a deletion request can't have. `events` rows
-are deliberately kept (no FK to `users` by design; they hold an opaque id, a
-type, a timestamp and a count — nothing personal once the user row is gone), so
-the audit trail isn't rewritten by a delete. Two entry points, both through that
-method: self-serve `POST /settings/delete-account`, which re-authenticates with
-the current password (a session cookie alone must not be able to destroy an
-account) and lands on `/?deleted=1` with a confirmation; and
+conversions + `ynab_connections` + `events` + the user row in a single
+transaction — explicitly rather than via `ON DELETE CASCADE`, since the cascade
+only fires while the per-connection `foreign_keys` pragma is on, and a
+half-completed deletion is the one failure mode a deletion request can't have.
+`events` rows were kept in the first draft as an "anonymous" activity log;
+`/review` killed that (nothing can read a deleted user's rows, since
+`aggregate_by_user` selects `FROM users`, and `events.detail` holds real YNAB
+account ids — privacy surface with no reader), so they now go with the account
+and a single `ACCOUNT_DELETED` row survives as a dated marker that a deletion
+happened. The same review caught that SQLite leaves deleted bytes readable in
+free pages: `PRAGMA secure_delete` plus a post-delete `VACUUM` + WAL checkpoint
+make the privacy policy's "permanently removes" true, verified by a test that
+greps the raw DB file for the email, YNAB account id and token. Two entry
+points, both through that method: self-serve `POST /settings/delete-account`,
+which re-authenticates with the current password (a session cookie alone must
+not be able to destroy an account) under `/login`'s shared per-email throttle,
+and shows its confirmation via a one-shot session flag rather than a
+`?deleted=1` param a crafted link could fake; and
 `docker compose exec app python -m app.delete_user <email>` for emailed
 requests (confirmation prompt, `--yes` for non-TTY, non-zero exit on an unknown
 email — same shape as `set_admin`). Deleting tokens does *not* revoke the YNAB
 grant (YNAB has no revocation endpoint), so both the UI and the privacy policy
 point at YNAB → Account Settings → Security; the policy now documents
-self-serve deletion, what survives (the anonymous activity log), and that YNAB
-data already converted is untouched. Tests: `tests/test_account_deletion.py`
-(row-level completeness, other users unaffected, wrong password / missing CSRF /
-anonymous rejected, logged out + can't log back in, email freed for re-signup,
-audit trail survives, CLI happy path + unknown email).
+self-serve deletion, the one dated marker that survives, and that YNAB data
+already converted is untouched. Tests: `tests/test_account_deletion.py`
+(row-level completeness, nothing recoverable in the raw DB file, other users
+unaffected, transaction rollback on a mid-delete failure, wrong / empty /
+missing password, throttling shared with `/login`, missing CSRF and anonymous
+POSTs rejected, logged out + can't log back in, one-shot confirmation, email
+freed for re-signup, CLI happy path + unknown email + every `_confirm` branch).
 
 **Completed:** 2026-07-27
 

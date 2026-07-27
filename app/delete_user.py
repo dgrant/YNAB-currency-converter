@@ -17,12 +17,14 @@ empty `data/app.db` and would silently delete nothing. This CLI exits non-zero
 and prints an error if the email doesn't exist, so a typo fails loudly instead
 of appearing to succeed.
 
-What it deletes: the user row (email + password hash), their YNAB OAuth tokens,
-and their conversion configs. What it keeps: the anonymous `events` rows (an
-opaque user id, event type, timestamp, count — no personal data, and no way
-back to the person once the user row is gone). What it can't touch: anything in
-YNAB itself — already-converted transactions keep their amounts and memos, and
-the OAuth grant should be revoked by the user from YNAB's security settings.
+What it deletes: everything belonging to that account — the user row (email +
+password hash), their YNAB OAuth tokens, their conversion configs, and their
+activity-log rows — then VACUUMs so the bytes aren't left readable in free
+pages. What it keeps: one `account_deleted` row carrying a dangling uuid and a
+date, so the log still shows a deletion happened. What it can't touch: anything
+in YNAB itself — already-converted transactions keep their amounts and memos,
+and the OAuth grant should be revoked by the user from YNAB's security
+settings.
 """
 import sys
 
@@ -38,7 +40,11 @@ def delete_user(email: str) -> str:
     user = store.get_by_email(email)
     if user is None:
         raise SystemExit(f"No user with email {email!r} — nothing deleted.")
-    store.delete(user.id)
+    if not store.delete(user.id):
+        # Only reachable if the row vanished between the lookup and the delete
+        # (a concurrent self-serve deletion). Report it rather than printing a
+        # success line for work that didn't happen.
+        raise SystemExit(f"{user.email} disappeared mid-delete — nothing to do.")
     events.record_event(settings.data_dir, user.id, events.ACCOUNT_DELETED, detail="admin")
     return f"Deleted {user.email} and all associated data."
 

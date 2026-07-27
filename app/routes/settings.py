@@ -4,7 +4,7 @@ import secrets
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-from .. import events, oauth
+from .. import auth, events, oauth
 from ..auth import get_user_store, require_login
 from ..config import get_settings
 from ..connections import ConnectionStore
@@ -110,18 +110,35 @@ def delete_account(
     Deleting the stored OAuth tokens does NOT revoke the grant on YNAB's side —
     YNAB has no token-revocation endpoint — so the confirmation points the user
     at YNAB's own security settings, same as Disconnect does.
+
+    Attempts share /login's per-email throttle: without that, this form is an
+    unthrottled oracle for guessing the password of a session someone else's
+    browser left logged in.
     """
+    locked_for = auth.password_lockout_seconds(user.email)
+    if locked_for:
+        return _settings_response(
+            request,
+            user,
+            error=f"Too many failed attempts — try again in {locked_for}s.",
+            status_code=429,
+        )
     if not verify_password(password, user.password_hash):
+        auth.record_password_failure(user.email)
         return _settings_response(request, user, error=WRONG_PASSWORD_ERROR, status_code=403)
+    auth.clear_password_failures(user.email)
     get_user_store().delete(user.id)
     # After the delete, so a failure there leaves no "deleted" row for a live
-    # account. The user id is now dangling by design (no FK) — the audit trail
-    # records that an account was deleted without retaining who it belonged to.
+    # account. This is the one row that outlives the user: a dangling uuid and
+    # a date, recording that a deletion happened, not whose.
     events.record_event(
         get_settings().data_dir, user.id, events.ACCOUNT_DELETED, detail="self"
     )
+    # clear() first, then the flag: the confirmation is a one-shot session
+    # value, so a crafted URL can't show a stranger "your account was deleted".
     request.session.clear()
-    return RedirectResponse("/?deleted=1", status_code=303)
+    request.session["account_deleted"] = True
+    return RedirectResponse("/", status_code=303)
 
 
 @router.get("/oauth/ynab/start")

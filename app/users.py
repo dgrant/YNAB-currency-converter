@@ -104,27 +104,42 @@ class UserStore:
         user existed, False if there was nothing to delete (so the CLI can fail
         loudly on a typo, same as set_admin_by_email).
 
-        The child rows are deleted explicitly rather than left to ON DELETE
-        CASCADE, and all of it runs in ONE transaction so a failure can't leave
-        an orphaned YNAB token behind: the cascade only fires while
+        Every per-user table is listed here explicitly rather than left to
+        ON DELETE CASCADE, and all of it runs in ONE transaction so a failure
+        can't leave an orphaned YNAB token behind: the cascade only fires while
         `PRAGMA foreign_keys = ON` is set (db.connect sets it, but that is a
         per-connection pragma, not a property of the schema), and a deletion
         that half-happens is exactly the failure mode a data-deletion request
-        must not have.
+        must not have. **Any NEW per-user table must be added to this method**,
+        or a deleted account will leave data behind.
 
-        `events` is deliberately NOT deleted — see db.SCHEMA: those rows carry
-        no personal data (an opaque user id, an event type, a timestamp, a
-        count), and once the user row is gone the id refers to nobody. Any NEW
-        per-user table must be added to this method, or a deleted account will
-        leave data behind.
+        That includes `events`. An earlier design kept those rows as an
+        "anonymous" activity log, but nothing can read them once the user row
+        is gone (`events.aggregate_by_user` selects FROM users), and
+        `events.detail` holds real YNAB account ids — so retaining them cost
+        privacy surface and bought nothing. The caller writes a single
+        account_deleted event *after* this returns; that dangling uuid plus a
+        date is all that survives, recording that a deletion happened without
+        recording whose.
+
+        VACUUM runs after the commit, outside the transaction: `secure_delete`
+        zeroes pages freed from here on, but the live DB predates that pragma,
+        so rebuilding the file is what actually purges bytes freed earlier. The
+        WAL checkpoint then truncates the write-ahead log, which would
+        otherwise still hold the pre-delete copy of those pages.
         """
         conn = db.connect(self.data_dir)
         try:
             with conn:  # commits on success, rolls back on any exception
                 conn.execute("DELETE FROM conversions WHERE user_id = ?", (user_id,))
                 conn.execute("DELETE FROM ynab_connections WHERE user_id = ?", (user_id,))
+                conn.execute("DELETE FROM events WHERE user_id = ?", (user_id,))
                 cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
-            return cur.rowcount > 0
+            deleted = cur.rowcount > 0
+            if deleted:
+                conn.execute("VACUUM")
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            return deleted
         finally:
             conn.close()
 

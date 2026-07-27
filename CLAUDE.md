@@ -79,18 +79,26 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
   access and the user re-connects via OAuth. Routes that need YNAB use the
   `require_ynab` dependency, which 303s to `/settings` when unconnected.
 - **Account deletion is one place** — `UserStore.delete(user_id)` deletes every
-  per-user row (conversions, `ynab_connections`, the user) in a single
-  transaction, explicitly rather than via `ON DELETE CASCADE` (the cascade only
-  fires while the per-connection `foreign_keys` pragma is on). **Any new
-  per-user table must be added to it**, or a deleted account leaves data
-  behind. `events` is deliberately excluded — those rows carry no personal data
-  and the audit trail must survive the delete (see `db.SCHEMA`). Two entry
-  points, both routing through that method: the user's own
-  `POST /settings/delete-account` (re-authenticates with the current password —
-  a session cookie alone must not destroy an account) and
-  `python -m app.delete_user <email>` for emailed deletion requests. Deleting
-  the tokens does not revoke the YNAB grant (YNAB has no revocation endpoint) —
-  the UI and privacy policy both say so.
+  per-user row (conversions, `ynab_connections`, `events`, the user) in a
+  single transaction, explicitly rather than via `ON DELETE CASCADE` (the
+  cascade only fires while the per-connection `foreign_keys` pragma is on).
+  **Any new per-user table must be added to it**, or a deleted account leaves
+  data behind. `events` included: an earlier design kept those rows as an
+  "anonymous" activity log, but nothing can read them once the user row is gone
+  (`aggregate_by_user` selects `FROM users`) and `events.detail` holds real
+  YNAB account ids, so keeping them was privacy surface with no reader. The
+  caller then records one `ACCOUNT_DELETED` event — a dangling uuid and a date,
+  showing that a deletion happened, not whose. `delete()` also VACUUMs and
+  checkpoints the WAL: `PRAGMA secure_delete` (set in `db.connect`) only zeroes
+  pages freed from here on, and the live DB predates it, so without the rebuild
+  the email/hash/tokens stay readable in free pages — which would make the
+  privacy policy's promise false. Two entry points, both routing through that
+  method: the user's own `POST /settings/delete-account` (re-authenticates with
+  the current password — a session cookie alone must not destroy an account,
+  and attempts share `/login`'s per-email throttle so the form isn't a
+  password-guessing oracle) and `python -m app.delete_user <email>` for emailed
+  deletion requests. Deleting the tokens does not revoke the YNAB grant (YNAB
+  has no revocation endpoint) — the UI and privacy policy both say so.
 - **CSRF** — every POST form must include `{{ csrf_input(request) }}`
   (template global in `templates.py`); `verify_csrf` is a dependency on both
   routers and 403s POSTs without the session's token. Remember this when

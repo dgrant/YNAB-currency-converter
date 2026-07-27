@@ -47,9 +47,14 @@ CREATE INDEX IF NOT EXISTS idx_conversions_user ON conversions(user_id);
 
 CREATE TABLE IF NOT EXISTS events (
     id          TEXT PRIMARY KEY,
-    -- Nullable on purpose: a failed-login event (added later) has no user, and
-    -- there is deliberately NO "REFERENCES users(id) ON DELETE CASCADE" — an
-    -- audit/activity row must survive a user delete, not vanish with it.
+    -- Nullable on purpose: a failed-login event (added later) has no user.
+    -- There is deliberately no "REFERENCES users(id) ON DELETE CASCADE" — not
+    -- so rows outlive their user (UserStore.delete removes them explicitly;
+    -- see below), but because the cascade only fires while the per-connection
+    -- foreign_keys pragma is on, which is too fragile a thing to hang deletion
+    -- correctness on. The ONE row that outlives a user is the account_deleted
+    -- marker, written after the delete: a dangling uuid and a date, recording
+    -- that a deletion happened without recording whose.
     user_id     TEXT,
     event_type  TEXT NOT NULL,
     -- The one summable quantity (e.g. transactions converted on an apply), in
@@ -57,7 +62,9 @@ CREATE TABLE IF NOT EXISTS events (
     -- over `detail`. NULL for events that have no count.
     count       INTEGER,
     -- Display-only extras (e.g. account_id). Never summed; never holds a token,
-    -- password, or transaction amount/memo — see the memo marker rules.
+    -- password, or transaction amount/memo — see the memo marker rules. It DOES
+    -- hold real YNAB account ids, which is why UserStore.delete drops these
+    -- rows rather than keeping them as an "anonymous" activity log.
     detail      TEXT,
     -- Defaulted in-DB so it matches users.created_at's datetime('now') format
     -- exactly (space-separated, no 'T'); record_event never passes a Python
@@ -143,6 +150,14 @@ def connect(data_dir: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    # Overwrite deleted content with zeros instead of leaving it readable in
+    # free pages. Without this, "delete my account" leaves the email, password
+    # hash and both YNAB tokens recoverable verbatim in app.db (and in every
+    # backup taken afterwards) until those pages happen to be reused — which
+    # would make the privacy policy's deletion promise untrue. Negligible cost
+    # at this DB's size. Applies to future deletes only; UserStore.delete also
+    # VACUUMs to reclaim pages freed before this was turned on.
+    conn.execute("PRAGMA secure_delete = ON")
     # Wait up to 5s for a competing writer instead of raising SQLITE_BUSY
     # immediately. WAL allows concurrent readers but still a single writer, and
     # sync routes run in a threadpool (plus recording an event now adds a write

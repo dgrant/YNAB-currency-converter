@@ -72,11 +72,11 @@
     store” above). When you disconnect YNAB from the Settings page, the stored
     access and refresh tokens are deleted immediately. You can delete your
     account yourself at any time from the Settings page — this immediately and
-    permanently removes your email address, password hash, YNAB tokens, and
-    conversion settings from the database. All that remains afterwards is an
-    anonymous activity log (an opaque identifier, an event name such as
-    “apply”, a timestamp, and a count) that no longer identifies anyone, since
-    the account it referred to no longer exists.
+    permanently removes your email address, password hash, YNAB tokens,
+    conversion settings, and activity history from the database, and overwrites
+    the space they occupied rather than leaving it readable. The only thing kept
+    is a dated note that <em>an</em> account was deleted, which records nothing
+    about who it belonged to.
   </p>
   <p>
     Deleting your account does not change anything in YNAB itself: transactions
