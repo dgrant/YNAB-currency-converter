@@ -30,10 +30,13 @@ root `VERSION` file. New entries go directly under this header, newest first.
 ### Fixed
 - Deleting an account no longer leaves your email, password hash, or YNAB
   tokens readable in the database file.
-- Work already in flight when you delete stops instead of continuing: an
-  in-progress conversion can no longer write to your YNAB budget after you've
-  been told your account is gone, and a YNAB token refresh that lands mid-delete
-  aborts rather than carrying on with a token it couldn't store.
+- Work already in flight when you delete now stops instead of continuing. A
+  conversion waiting its turn aborts rather than applying against settings you
+  just deleted, and a YNAB token refresh landing mid-delete gives up rather
+  than carrying on with a token it couldn't store. One narrow gap remains: a
+  conversion that has already passed that check and is waiting on YNAB to
+  respond can still complete its write. Closing it needs the delete to hold the
+  same lock the conversion does, which is tracked as a follow-up.
 - Repeated wrong passwords on the delete form are rate-limited, so a stolen
   session can't be used to guess your password. The limit is tracked per
   account, so nobody else can lock you out of deleting your own account by

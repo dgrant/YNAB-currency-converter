@@ -207,6 +207,33 @@ this kind of swap-in.
 
 ## Correctness & robustness
 
+### An apply already past its check can still PATCH a deleted account's budget
+
+**What:** Make account deletion and the apply's fetch→filter→PATCH section
+take the same user-scoped lock, so a delete can't land in the middle of an
+apply that has already cleared its existence check.
+
+**Why:** `_apply_updates` raises `ConversionGoneError` when the conversion row
+has vanished (`app/routes/conversions.py:870`), but that check runs *before*
+`ynab.get_transactions` and the category fetch — a network round trip — and the
+PATCH is at `:929`. Delete the account inside that window and the write still
+lands, after the user has been shown the deletion confirmation. Found
+independently by the round-5 adversarial pass (graded INVESTIGATE) and by
+`/codex challenge` before the v0.6.0.0 merge; two models converging is why it
+is P1 rather than deferred a third time.
+
+**Context:** The existing guard narrowed the window from "the whole apply" to
+"one YNAB round trip", so this is a real but small remainder. A second
+existence check just before the PATCH would shrink it again without closing it
+— the fix is a shared lock, or a per-user generation counter re-checked
+immediately before `update_transactions`. Note the current test
+(`tests/test_account_deletion.py:700`) deletes *before* `_apply_updates` starts,
+so it does not cover this window; the fix needs a test that deletes after the
+existence check.
+
+**Effort:** M
+**Priority:** P1
+
 ### Cap or chunk large previews / applies
 
 **What:** Bound the work a single preview/apply does when a conversion's
@@ -273,6 +300,29 @@ lines and the preview→approve safety net makes it low-risk.
 **Priority:** P3
 
 ## Ops / deployment
+
+### A failed deploy is stamped as done and never retried
+
+**What:** Move the `.last-deployed` write in `deploy/autodeploy.sh` to *after*
+the health check passes, and roll back to the previous image when it doesn't.
+
+**Why:** The stamp is written at `deploy/autodeploy.sh:54`, immediately after
+`docker compose up -d --build` and before the `/healthz` poll at `:56`. If the
+container fails to start, the stamp already equals the remote SHA, so the next
+cron run exits at `:25` (`[ "$deployed_sha" = "$remote_sha" ] && exit 0`). The
+failure is logged as a WARNING and then nothing retries — the site stays down
+on the old container (or down entirely) until someone reads `~/autodeploy.log`.
+Auto-deploy silently becomes deploy-once-and-hope.
+
+**Context:** Found by `/codex challenge` before the v0.6.0.0 merge and confirmed
+by reading the script. The health poll and the SHA-label check already exist and
+work; only the ordering is wrong. Rollback is the larger half — `docker compose`
+alone doesn't keep the previous image tagged, so it needs either a tagged
+previous image or a `git checkout` of the prior SHA plus a rebuild. Splitting
+the ordering fix (small, high value) from the rollback (larger) is reasonable.
+
+**Effort:** M
+**Priority:** P1
 
 ### Rotate the YNAB OAuth client secret
 
