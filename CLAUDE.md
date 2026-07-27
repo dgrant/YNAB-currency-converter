@@ -99,7 +99,10 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
   returned `busy` flag** and retries — `PRAGMA wal_checkpoint(TRUNCATE)`
   doesn't raise when a reader blocks it, it returns `(busy, …)`, and treating
   that as success is how a deletion gets reported as permanent while the rows
-  are still in `app.db-wal`. It never raises and its callers treat it as
+  are still on disk — in `app.db` itself for any row old enough to have
+  been checkpointed, which is every real user (a fresh test DB puts them in
+  `app.db-wal` instead, which is why the residue test reads both). It never
+  raises and its callers treat it as
   best-effort (the rows are already gone); a checkpoint that stays busy is
   logged at ERROR rather than failing the request.
   VACUUM is deliberately NOT on the request path (it rewrites the file under an

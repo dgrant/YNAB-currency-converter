@@ -29,7 +29,7 @@ root `VERSION` file. New entries go directly under this header, newest first.
 
 ### Fixed
 - Deleting an account no longer leaves your email, password hash, or YNAB
-  tokens readable in the database file or its write-ahead log.
+  tokens readable in the database file.
 - Work already in flight when you delete stops instead of continuing: an
   in-progress conversion can no longer write to your YNAB budget after you've
   been told your account is gone, and a YNAB token refresh that lands mid-delete

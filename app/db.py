@@ -150,42 +150,67 @@ def db_path(data_dir: Path) -> Path:
 # How hard to try to truncate the WAL before giving up and logging.
 _CHECKPOINT_ATTEMPTS = 3
 _CHECKPOINT_RETRY_SECONDS = 0.1
+# A TRUNCATE checkpoint invokes the busy handler, so it inherits `busy_timeout`
+# (5s) and each attempt can block for all of it — 15s per delete, on the request
+# path, with new writers stalled behind the pending checkpoint. That is the same
+# single-writer monopoly that got VACUUM moved off this path, so the checkpoint
+# gets its own short timeout: fail fast, log, let a later checkpoint finish it.
+_CHECKPOINT_BUSY_TIMEOUT_MS = 250
 
 
 def checkpoint_wal(conn: sqlite3.Connection) -> bool:
     """Fold the write-ahead log into the database and truncate it. Returns
     whether it actually completed.
 
-    Called after deleting an account: without it, `app.db-wal` keeps the
-    pre-delete copy of the rows (email, password hash, YNAB tokens) even
-    though the rows are gone from `app.db`.
+    Called after deleting an account. `secure_delete` zeroes the freed pages,
+    but in WAL mode that zeroing is written to the -wal file while the
+    PRE-DELETE copy of the page stays in `app.db` until a checkpoint folds the
+    new version over it. So until this succeeds, the email, password hash and
+    YNAB tokens of a long-lived row are still readable **in the main database
+    file** — the one any `cp`/`docker cp`/volume snapshot backup picks up.
+    (Only on a young row that was never checkpointed does the residue sit in
+    the -wal instead, which is what a fresh test database produces. Both are
+    verified; production is the first case.)
 
     `PRAGMA wal_checkpoint(TRUNCATE)` does NOT raise when it cannot finish —
     it returns `(busy, log_frames, checkpointed)`, and `busy = 1` means a
-    reader on an older snapshot blocked it and the old frames are still on
+    reader on an older snapshot blocked it and the old pages are still on
     disk. Treating that as success is how a deletion gets reported as
     permanent while the data is still readable, so retry briefly and log
     loudly if it never clears. Never raises: the rows are already deleted and
     the account is gone either way, so this must not turn a completed deletion
     into a 500.
     """
-    for attempt in range(_CHECKPOINT_ATTEMPTS):
+    try:
+        previous_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        conn.execute(f"PRAGMA busy_timeout = {_CHECKPOINT_BUSY_TIMEOUT_MS}")
+    except sqlite3.Error:
+        logger.exception("WAL checkpoint could not set its busy timeout")
+        return False
+    try:
+        for attempt in range(_CHECKPOINT_ATTEMPTS):
+            try:
+                row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            except sqlite3.Error:
+                logger.exception("WAL checkpoint failed outright")
+                return False
+            # row is None on a non-WAL database (nothing to checkpoint).
+            if row is None or not row[0]:
+                return True
+            if attempt + 1 < _CHECKPOINT_ATTEMPTS:
+                time.sleep(_CHECKPOINT_RETRY_SECONDS)
+        logger.error(
+            "WAL checkpoint still busy after %d attempts — the pre-delete copy of "
+            "the deleted rows may remain readable in the main database file until "
+            "a later checkpoint succeeds",
+            _CHECKPOINT_ATTEMPTS,
+        )
+        return False
+    finally:
         try:
-            row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            conn.execute(f"PRAGMA busy_timeout = {previous_timeout}")
         except sqlite3.Error:
-            logger.exception("WAL checkpoint failed outright")
-            return False
-        # row is None on a non-WAL database (nothing to checkpoint).
-        if row is None or not row[0]:
-            return True
-        if attempt + 1 < _CHECKPOINT_ATTEMPTS:
-            time.sleep(_CHECKPOINT_RETRY_SECONDS)
-    logger.error(
-        "WAL checkpoint still busy after %d attempts — deleted rows may remain "
-        "readable in the -wal file until a later checkpoint succeeds",
-        _CHECKPOINT_ATTEMPTS,
-    )
-    return False
+            logger.exception("WAL checkpoint could not restore the busy timeout")
 
 
 def vacuum(data_dir: Path) -> None:

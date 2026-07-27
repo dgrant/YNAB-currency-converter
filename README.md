@@ -56,11 +56,10 @@ Deleting an account is self-serve: **Settings → Delete account** asks for the
 password (a logged-in session alone can't destroy an account), then removes the
 account, its YNAB connection, every configured conversion and its activity
 history. The freed space is overwritten rather than left readable
-(`PRAGMA secure_delete`), though under concurrent reads a copy can linger in
-the write-ahead log until the next checkpoint clears it —
-`db.checkpoint_wal` retries, then logs at ERROR rather than failing the
-request. Nothing in YNAB changes — transactions already converted keep their
-amounts and memos — and the OAuth grant itself is revoked by the user from
+(`PRAGMA secure_delete` plus a WAL checkpoint — see `db.checkpoint_wal` for
+why the checkpoint is the load-bearing half, and what is still on disk if it
+can't complete). Nothing in YNAB changes: transactions already converted keep
+their amounts and memos, and the OAuth grant itself is revoked by the user from
 YNAB → Account Settings → Security. To action a request for someone who can no
 longer sign in, run it from the server:
 
