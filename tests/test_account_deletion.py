@@ -45,7 +45,7 @@ def _conv(account_id="acct-1"):
 
 
 def _seed_account(client, email=EMAIL, account_id="acct-1"):
-    """Sign up, connect YNAB, and store one conversion. Returns (data_dir, user)."""
+    """Sign up, connect YNAB, store one conversion. -> (data_dir, user, csrf_token)."""
     token = signup(client, email=email)
     connect_ynab(client, email=email)
     data_dir = get_settings().data_dir
@@ -343,6 +343,21 @@ def test_cli_main_strips_the_yes_flag_and_deletes(app_client, monkeypatch):
     assert confirmed == [(EMAIL, True)]
     assert EMAIL in message
     assert _row_counts(data_dir, user.id) == GONE
+
+
+def test_cli_main_without_yes_still_confirms(app_client, monkeypatch):
+    """The other half of the --yes test. Without this, hardcoding
+    `assume_yes = True` — silently skipping confirmation on an irreversible
+    delete — passes the whole suite."""
+    from app.delete_user import main
+
+    data_dir, user, _ = _seed_account(app_client)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))  # isatty() is False
+
+    with pytest.raises(SystemExit, match="Not a terminal"):
+        main([EMAIL])
+
+    assert _row_counts(data_dir, user.id) == INTACT  # nothing deleted
 
 
 def test_cli_compacts_the_database(app_client, monkeypatch):
@@ -703,6 +718,13 @@ def test_apply_all_skips_a_vanished_group_and_finishes_the_run(app_client, monke
     # written anyway; zero would mean one bad group killed the whole batch.
     assert response.status_code == 303
     assert patched.call_count == 1
+    # ...and it was skipped SILENTLY, not reported as a group failure. Status +
+    # PATCH count alone can't tell those apart: raising any YNABError instead
+    # would also yield one PATCH, but would render an error row for the
+    # vanished account in the summary.
+    summary = app_client.get("/conversions").text
+    assert "Europe Trip" in summary
+    assert "Japan Trip" not in summary
 
 
 def test_token_refresh_aborts_when_the_account_was_deleted_mid_request(app_client):
