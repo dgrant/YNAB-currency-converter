@@ -99,6 +99,35 @@ class UserStore:
             conn.close()
         return _row_to_user(row) if row else None
 
+    def delete(self, user_id: str) -> bool:
+        """Delete a user and every row belonging to them. Returns True if the
+        user existed, False if there was nothing to delete (so the CLI can fail
+        loudly on a typo, same as set_admin_by_email).
+
+        The child rows are deleted explicitly rather than left to ON DELETE
+        CASCADE, and all of it runs in ONE transaction so a failure can't leave
+        an orphaned YNAB token behind: the cascade only fires while
+        `PRAGMA foreign_keys = ON` is set (db.connect sets it, but that is a
+        per-connection pragma, not a property of the schema), and a deletion
+        that half-happens is exactly the failure mode a data-deletion request
+        must not have.
+
+        `events` is deliberately NOT deleted — see db.SCHEMA: those rows carry
+        no personal data (an opaque user id, an event type, a timestamp, a
+        count), and once the user row is gone the id refers to nobody. Any NEW
+        per-user table must be added to this method, or a deleted account will
+        leave data behind.
+        """
+        conn = db.connect(self.data_dir)
+        try:
+            with conn:  # commits on success, rolls back on any exception
+                conn.execute("DELETE FROM conversions WHERE user_id = ?", (user_id,))
+                conn.execute("DELETE FROM ynab_connections WHERE user_id = ?", (user_id,))
+                cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
     def set_refresh_on_load(self, user_id: str, enabled: bool) -> None:
         """Toggle the per-user 'refresh pending counts on page load' opt-in."""
         conn = db.connect(self.data_dir)

@@ -3,7 +3,7 @@
 {% block content %}
 <div class="prose">
   <h1>Privacy Policy</h1>
-  <p class="hint">Last updated: 2026-07-06</p>
+  <p class="hint">Last updated: 2026-07-27</p>
 
   <p>
     This app helps you convert foreign-currency transactions in your YNAB plan
@@ -70,8 +70,19 @@
     long as you keep your account. Transaction data is never retained — it lives
     only in memory for the duration of a single request (see “What we do not
     store” above). When you disconnect YNAB from the Settings page, the stored
-    access and refresh tokens are deleted immediately. When you ask us to delete
-    your account (see below), your account and all associated data are removed.
+    access and refresh tokens are deleted immediately. You can delete your
+    account yourself at any time from the Settings page — this immediately and
+    permanently removes your email address, password hash, YNAB tokens, and
+    conversion settings from the database. All that remains afterwards is an
+    anonymous activity log (an opaque identifier, an event name such as
+    “apply”, a timestamp, and a count) that no longer identifies anyone, since
+    the account it referred to no longer exists.
+  </p>
+  <p>
+    Deleting your account does not change anything in YNAB itself: transactions
+    this app already converted keep their amounts and memos. It also cannot
+    revoke this app's authorization on YNAB's side — you can do that from
+    YNAB &rarr; Account Settings &rarr; Security.
   </p>
 
   <h2>Changes to this policy</h2>
@@ -90,8 +101,11 @@
       <a href="https://app.ynab.com/settings" rel="noopener">account settings</a>.
     </li>
     <li>
-      To delete your account and associated data, email
-      <a href="mailto:davidgrant@gmail.com">davidgrant@gmail.com</a>.
+      You can delete your account and all associated data yourself from the
+      Settings page (“Delete account”); it takes effect immediately. If you
+      would rather we do it for you, or you can no longer sign in, email
+      <a href="mailto:davidgrant@gmail.com">davidgrant@gmail.com</a> and we
+      will delete it for you.
     </li>
   </ul>
 

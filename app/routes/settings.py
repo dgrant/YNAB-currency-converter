@@ -9,7 +9,7 @@ from ..auth import get_user_store, require_login
 from ..config import get_settings
 from ..connections import ConnectionStore
 from ..templates import templates
-from ..users import User
+from ..users import User, verify_password
 
 router = APIRouter(dependencies=[Depends(require_login)])
 
@@ -30,6 +30,11 @@ _ERRORS = {
     "likely revoked from YNAB's settings, or the token expired). Please reconnect.",
 }
 
+WRONG_PASSWORD_ERROR = (
+    "That password is incorrect — your account was not deleted. Enter your "
+    "current password to confirm."
+)
+
 
 def get_connection_store() -> ConnectionStore:
     return ConnectionStore(get_settings().data_dir)
@@ -42,8 +47,12 @@ def _redirect_uri(request: Request) -> str:
     return str(request.url_for("oauth_callback"))
 
 
-@router.get("/settings")
-def settings_page(request: Request, user: User = Depends(require_login)):
+def _settings_response(
+    request: Request, user: User, *, error: str | None = None, status_code: int = 200
+):
+    """Render /settings. `error` overrides the ?error= flash so a failed POST
+    (e.g. the wrong password on delete-account) can re-render in place instead
+    of redirecting the message through the URL."""
     connection = get_connection_store().get(user.id)
     return templates.TemplateResponse(
         request,
@@ -52,10 +61,16 @@ def settings_page(request: Request, user: User = Depends(require_login)):
             "user": user,
             "connection": connection,
             "oauth_configured": oauth.is_configured(get_settings()),
-            "flash": _FLASHES.get(str(request.query_params.get("ok"))),
-            "error": _ERRORS.get(str(request.query_params.get("error"))),
+            "flash": None if error else _FLASHES.get(str(request.query_params.get("ok"))),
+            "error": error or _ERRORS.get(str(request.query_params.get("error"))),
         },
+        status_code=status_code,
     )
+
+
+@router.get("/settings")
+def settings_page(request: Request, user: User = Depends(require_login)):
+    return _settings_response(request, user)
 
 
 @router.post("/settings/ynab/disconnect")
@@ -77,6 +92,36 @@ def set_refresh_on_load(
     return RedirectResponse(
         f"/settings?ok={'refresh_on' if on else 'refresh_off'}", status_code=303
     )
+
+
+@router.post("/settings/delete-account")
+def delete_account(
+    request: Request,
+    user: User = Depends(require_login),
+    password: str = Form(default=""),
+):
+    """Permanently delete the logged-in user's account and all their data.
+
+    Re-authenticates with the current password first: the session cookie alone
+    shouldn't be enough to destroy an account (a borrowed/unlocked browser
+    otherwise suffices), and unlike disconnect this is not undoable. A wrong
+    password re-renders /settings with an error and changes nothing.
+
+    Deleting the stored OAuth tokens does NOT revoke the grant on YNAB's side —
+    YNAB has no token-revocation endpoint — so the confirmation points the user
+    at YNAB's own security settings, same as Disconnect does.
+    """
+    if not verify_password(password, user.password_hash):
+        return _settings_response(request, user, error=WRONG_PASSWORD_ERROR, status_code=403)
+    get_user_store().delete(user.id)
+    # After the delete, so a failure there leaves no "deleted" row for a live
+    # account. The user id is now dangling by design (no FK) — the audit trail
+    # records that an account was deleted without retaining who it belonged to.
+    events.record_event(
+        get_settings().data_dir, user.id, events.ACCOUNT_DELETED, detail="self"
+    )
+    request.session.clear()
+    return RedirectResponse("/?deleted=1", status_code=303)
 
 
 @router.get("/oauth/ynab/start")

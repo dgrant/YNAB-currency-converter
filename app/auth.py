@@ -124,7 +124,11 @@ def home(request: Request):
     """Public landing page; logged-in users go straight to their conversions."""
     if request.session.get("user_id"):
         return RedirectResponse("/conversions", status_code=303)
-    return templates.TemplateResponse(request, "landing.html", {})
+    # ?deleted=1 is where delete-account lands (the session is gone by then, so
+    # the confirmation can't be shown on a logged-in page).
+    return templates.TemplateResponse(
+        request, "landing.html", {"deleted": request.query_params.get("deleted") == "1"}
+    )
 
 
 @router.get("/privacy")

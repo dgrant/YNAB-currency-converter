@@ -389,6 +389,35 @@ only worth doing if usage actually grows past friends-and-family scale.
 
 ## Completed
 
+### Delete a user account and all its data
+**(Features / Security — the multi-user follow-up, and a real deletion request)**
+
+Done (2026-07-27, branch `claude/user-account-deletion-4n74qr`), prompted by a
+user emailing to ask for their account to be deleted while the YNAB OAuth App
+Review was in flight. One store method, `UserStore.delete(user_id)`, deletes
+conversions + `ynab_connections` + the user row in a single transaction —
+explicitly rather than via `ON DELETE CASCADE`, since the cascade only fires
+while the per-connection `foreign_keys` pragma is on, and a half-completed
+deletion is the one failure mode a deletion request can't have. `events` rows
+are deliberately kept (no FK to `users` by design; they hold an opaque id, a
+type, a timestamp and a count — nothing personal once the user row is gone), so
+the audit trail isn't rewritten by a delete. Two entry points, both through that
+method: self-serve `POST /settings/delete-account`, which re-authenticates with
+the current password (a session cookie alone must not be able to destroy an
+account) and lands on `/?deleted=1` with a confirmation; and
+`docker compose exec app python -m app.delete_user <email>` for emailed
+requests (confirmation prompt, `--yes` for non-TTY, non-zero exit on an unknown
+email — same shape as `set_admin`). Deleting tokens does *not* revoke the YNAB
+grant (YNAB has no revocation endpoint), so both the UI and the privacy policy
+point at YNAB → Account Settings → Security; the policy now documents
+self-serve deletion, what survives (the anonymous activity log), and that YNAB
+data already converted is untouched. Tests: `tests/test_account_deletion.py`
+(row-level completeness, other users unaffected, wrong password / missing CSRF /
+anonymous rejected, logged out + can't log back in, email freed for re-signup,
+audit trail survives, CLI happy path + unknown email).
+
+**Completed:** 2026-07-27
+
 ### Admin dashboard, per-user metrics, and an activity/audit log
 **(Ops / deployment — closes "Audit log", "Per-user metrics", "Admin interface")**
 
@@ -648,9 +677,9 @@ Done (2026-07): email+password signup like rmillan's, per-user YNAB
 credentials (OAuth — the PAT path was removed 2026-07), conversions scoped
 by `user_id`, all in SQLite (`data/app.db` — users, ynab_connections,
 conversions). `python -m app.import_legacy <email>` migrates a v1
-deployment. Follow-ups worth considering: account deletion (password reset
-is now its own task above) and signup abuse controls if it's ever opened up
-beyond friends & family.
+deployment. Account deletion landed 2026-07 (see below). Follow-ups worth
+considering: password reset (its own task above) and signup abuse controls if
+it's ever opened up beyond friends & family.
 
 **Completed:** 2026-07
 

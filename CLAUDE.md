@@ -30,6 +30,7 @@ app/
   rates.py           # FrankfurterClient + RateTable (business-day fallback)
   convert.py         # core: filter unconverted, compute amounts/memos
   import_legacy.py   # one-shot v1 migration: python -m app.import_legacy <email>
+  delete_user.py     # CLI for deletion requests: python -m app.delete_user <email>
   routes/conversions.py  # list / new / edit / delete / bulk-delete / detail
                          #   preview / apply (single) + preview-all / apply-all
                          #   (grouped dashboard flow); all scoped by user
@@ -77,6 +78,19 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
   row (from before removal) has no refresh token, so it's deleted on next
   access and the user re-connects via OAuth. Routes that need YNAB use the
   `require_ynab` dependency, which 303s to `/settings` when unconnected.
+- **Account deletion is one place** — `UserStore.delete(user_id)` deletes every
+  per-user row (conversions, `ynab_connections`, the user) in a single
+  transaction, explicitly rather than via `ON DELETE CASCADE` (the cascade only
+  fires while the per-connection `foreign_keys` pragma is on). **Any new
+  per-user table must be added to it**, or a deleted account leaves data
+  behind. `events` is deliberately excluded — those rows carry no personal data
+  and the audit trail must survive the delete (see `db.SCHEMA`). Two entry
+  points, both routing through that method: the user's own
+  `POST /settings/delete-account` (re-authenticates with the current password —
+  a session cookie alone must not destroy an account) and
+  `python -m app.delete_user <email>` for emailed deletion requests. Deleting
+  the tokens does not revoke the YNAB grant (YNAB has no revocation endpoint) —
+  the UI and privacy policy both say so.
 - **CSRF** — every POST form must include `{{ csrf_input(request) }}`
   (template global in `templates.py`); `verify_csrf` is a dependency on both
   routers and 403s POSTs without the session's token. Remember this when

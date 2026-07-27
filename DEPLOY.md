@@ -68,6 +68,30 @@ changes nothing — so the command errors loudly and exits non-zero on an
 unknown email rather than pretending to succeed. After granting, the account
 sees an "Admin" link on `/settings` and can open `/admin`.
 
+## Deleting a user account
+
+Users can delete their own account from **Settings → Delete account** (it asks
+for their password and takes effect immediately) — point emailed requests there
+first. To action a request yourself, e.g. when the person can no longer sign in,
+run it **inside the container** so it hits the live DB in the mounted volume:
+
+```bash
+docker compose exec app python -m app.delete_user them@example.com
+```
+
+It prints who it's about to delete and asks for confirmation; add `--yes` to
+skip the prompt (required with `docker compose exec -T`, which has no TTY). Like
+`set_admin`, it exits non-zero on an unknown email instead of pretending to
+succeed — and run on the host by mistake it would open a different, empty
+`data/app.db` and delete nothing.
+
+This deletes the user's email + password hash, their YNAB OAuth tokens, and
+their conversion configs. It keeps the anonymous `events` rows (opaque user id,
+event type, timestamp, count — no personal data, and nothing left to link them
+to a person). It cannot touch YNAB itself: transactions the app already
+converted keep their amounts and memos, and the OAuth grant is revoked by the
+user from YNAB → Account Settings → Security.
+
 ## Updating
 
 Auto-deploy (below) normally handles this. To update by hand:
