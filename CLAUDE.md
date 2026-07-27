@@ -103,8 +103,11 @@ tests/               # pytest (respx-mocked YNAB + Frankfurter); test_app_flow.p
   CLI and documented in DEPLOY.md. Two entry points, both routing through
   `delete()`: the user's own `POST /settings/delete-account` (re-authenticates
   with the current password — a session cookie alone must not destroy an
-  account — throttled by `auth.reauth_key(user.id)`, **not** by email: sharing
-  `/login`'s email counter would let any anonymous visitor lock the owner out of
+  account — throttled per user id via `auth.password_lockout_seconds` /
+  `record_password_failure` / `clear_password_failures`, backed by a
+  `_reauth_throttle` dict **separate from** `/login`'s email-keyed one: any
+  shared counter, even a namespaced key in the same dict, is reachable by an
+  anonymous visitor POSTing /login and lets a stranger lock the owner out of
   deleting their own account) and `python -m app.delete_user <email>` for
   emailed deletion requests. Deleting the tokens does not revoke the YNAB grant
   (YNAB has no revocation endpoint) — the UI and privacy policy both say so.

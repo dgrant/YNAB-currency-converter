@@ -127,6 +127,10 @@ def get_access_token(settings: Settings, store: ConnectionStore, user_id: str) -
     deleted so the UI returns to the "connect" state. Transient failures
     bubble up as YNABError (friendly 502) without touching the stored tokens.
 
+    If the account is deleted between the refresh and the token write, the
+    resulting ConnectionGoneError becomes a 401 YNABError so the request
+    aborts rather than continuing with a token that was never persisted.
+
     Refreshing is serialized per user: YNAB rotates the refresh token on use,
     so two concurrent requests racing to refresh the same stale token would
     otherwise have the loser's refresh rejected and delete the connection the

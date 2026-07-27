@@ -53,8 +53,8 @@ CREATE TABLE IF NOT EXISTS events (
     id          TEXT PRIMARY KEY,
     -- Nullable on purpose: a failed-login event (added later) has no user.
     -- There is deliberately no "REFERENCES users(id) ON DELETE CASCADE" — not
-    -- so rows outlive their user (UserStore.delete removes them explicitly;
-    -- see below), but because the cascade only fires while the per-connection
+    -- so rows outlive their user (users.py: UserStore.delete removes them
+    -- explicitly), but because the cascade only fires while the per-connection
     -- foreign_keys pragma is on, which is too fragile a thing to hang deletion
     -- correctness on. The ONE row that outlives a user is the account_deleted
     -- marker, written after the delete: a dangling uuid and a date, recording
@@ -182,9 +182,8 @@ def checkpoint_wal(conn: sqlite3.Connection) -> bool:
             time.sleep(_CHECKPOINT_RETRY_SECONDS)
     logger.error(
         "WAL checkpoint still busy after %d attempts — deleted rows may remain "
-        "readable in %s until a later checkpoint succeeds",
+        "readable in the -wal file until a later checkpoint succeeds",
         _CHECKPOINT_ATTEMPTS,
-        "app.db-wal",
     )
     return False
 
