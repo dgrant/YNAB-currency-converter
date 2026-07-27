@@ -170,6 +170,52 @@ def test_delete_removes_the_users_activity_log(app_client):
     assert _event_types(data_dir, user.id) == set()
 
 
+def test_an_event_racing_the_delete_does_not_resurrect_the_account(app_client):
+    """Events are recorded on their own connection AFTER the action commits, and
+    `events` has no FK. Two tabs — one creating a conversion, one deleting the
+    account — could land a row for a user who no longer exists, carrying a real
+    YNAB account id in `detail`, which nothing ever removes. That falsifies the
+    privacy policy's "the only thing kept is a dated note"."""
+    data_dir, user, _ = _seed_account(app_client)
+
+    UserStore(data_dir).delete(user.id)
+    # The in-flight request finally gets around to recording its event.
+    events.record_event(
+        data_dir, user.id, events.CONVERSION_CREATED, detail="REAL-YNAB-ACCOUNT-ID"
+    )
+
+    assert _event_types(data_dir, user.id) == set()
+    raw = db.db_path(data_dir).read_bytes()
+    assert b"REAL-YNAB-ACCOUNT-ID" not in raw
+
+
+def test_the_deletion_marker_itself_still_records(app_client):
+    """...but account_deleted is the deliberate orphan and must still land, or
+    the audit trail loses the one row it exists to keep."""
+    data_dir, user, _ = _seed_account(app_client)
+
+    UserStore(data_dir).delete(user.id)
+    events.record_event(data_dir, user.id, events.ACCOUNT_DELETED, detail="self")
+
+    assert _event_types(data_dir, user.id) == {events.ACCOUNT_DELETED}
+
+
+def test_a_failed_login_event_still_records_without_a_user(app_client):
+    """The other exception: user_id is None by design for anonymous events."""
+    data_dir, _, _ = _seed_account(app_client)
+
+    events.record_event(data_dir, None, events.LOGIN, detail="anonymous")
+
+    conn = db.connect(data_dir)
+    try:
+        n = conn.execute(
+            "SELECT COUNT(*) AS n FROM events WHERE user_id IS NULL"
+        ).fetchone()["n"]
+    finally:
+        conn.close()
+    assert n == 1
+
+
 def test_deleted_account_leaves_no_ynab_identifiers_on_disk(app_client):
     """The end-to-end promise: nothing recoverable, not even in free pages."""
     data_dir, user, token = _seed_account(app_client, account_id="acct-sentinel")
@@ -259,8 +305,17 @@ class _FakeConn:
         self.rows = list(rows or [])
         self.raises = raises
         self.calls = 0
+        self.timeouts = []
 
-    def execute(self, *args, **kwargs):
+    def execute(self, sql, *args, **kwargs):
+        # checkpoint_wal reads and re-sets busy_timeout around the attempts so a
+        # checkpoint can't inherit the 5s writer timeout; only the actual
+        # wal_checkpoint calls consume a scripted row.
+        if sql.strip() == "PRAGMA busy_timeout":
+            return SimpleNamespace(fetchone=lambda: (5000,))
+        if sql.strip().startswith("PRAGMA busy_timeout ="):
+            self.timeouts.append(sql)
+            return SimpleNamespace(fetchone=lambda: None)
         self.calls += 1
         if self.raises:
             raise self.raises
@@ -478,6 +533,65 @@ def test_login_cannot_reach_the_reauth_counter(app_client, app_client_factory):
 
     assert _delete_account(app_client, token).status_code == 303
     assert _row_counts(data_dir, user.id) == GONE
+
+
+def test_a_login_flood_cannot_reset_a_counter_below_the_threshold(app_client, monkeypatch):
+    """The subtler half of the same bug. A counter that hasn't locked yet has
+    locked_until == 0.0, which any "sweep what has expired" test reads as
+    expired — so a flood wipes victims *while they are still accumulating* and
+    they never reach a lockout at all."""
+    import app.auth as auth
+
+    monkeypatch.setattr(auth, "_MAX_TRACKED_KEYS", 10)
+    for _ in range(auth.LOCKOUT_THRESHOLD - 1):  # 4 of 5: not locked yet
+        auth._record_failure(auth._login_throttle, EMAIL)
+    assert not auth._is_locked(auth._login_throttle, EMAIL)
+
+    for i in range(40):
+        for _ in range(20):
+            auth._record_failure(auth._login_throttle, f"junk{i}@example.com")
+
+    # The counter survived, so one more failure still trips the lockout.
+    auth._record_failure(auth._login_throttle, EMAIL)
+    assert auth._is_locked(auth._login_throttle, EMAIL), "flood reset the counter"
+
+
+def test_login_rejects_an_oversized_email_before_it_becomes_a_throttle_key(app_client):
+    """The throttle key is the submitted email, so an unbounded one makes the
+    entry size attacker-controlled (measured: 1 MiB keys, 500 entries, 510 MB)."""
+    import app.auth as auth
+
+    huge = "a" * 5000 + "@example.com"
+    response = app_client.post(
+        "/login",
+        data={"email": huge, "password": "x", "csrf_token": get_csrf(app_client)},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 401
+    assert huge not in auth._login_throttle
+    assert all(len(k) <= auth.MAX_EMAIL_LENGTH for k in auth._login_throttle)
+
+
+def test_a_login_flood_cannot_clear_a_lockout(app_client, monkeypatch):
+    """A live lockout must survive the key-cap sweep. An eviction policy that
+    drops the entry closest to expiring looks like a memory fix but hands an
+    attacker a lockout bypass: flooding /login with hard-hammered junk keys
+    (300s lockouts) pushes out a victim locked at the threshold (2s), resetting
+    the backoff that stops password guessing."""
+    import app.auth as auth
+
+    monkeypatch.setattr(auth, "_MAX_TRACKED_KEYS", 10)
+    for _ in range(auth.LOCKOUT_THRESHOLD):
+        auth._record_failure(auth._login_throttle, EMAIL)
+    assert auth._is_locked(auth._login_throttle, EMAIL)
+
+    # Flood with keys whose lockouts are far longer than the victim's.
+    for i in range(40):
+        for _ in range(20):
+            auth._record_failure(auth._login_throttle, f"junk{i}@example.com")
+
+    assert auth._is_locked(auth._login_throttle, EMAIL), "flood cleared the lockout"
 
 
 def test_delete_account_requires_csrf(app_client):

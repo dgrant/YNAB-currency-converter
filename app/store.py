@@ -6,6 +6,20 @@ from pathlib import Path
 from . import db
 
 
+class UserGoneError(Exception):
+    """The insert failed because the user no longer exists — the account was
+    deleted while this request was in flight. Distinct from
+    DuplicateAccountError because `sqlite3.IntegrityError` covers both the
+    (user_id, account_id) uniqueness constraint AND the users foreign key, and
+    reporting "that account already has a conversion" for a deleted account is
+    simply the wrong answer. Matches the ConnectionGoneError /
+    ConversionGoneError treatment the other mid-delete races get."""
+
+
+def _is_foreign_key_violation(exc: sqlite3.IntegrityError) -> bool:
+    return "FOREIGN KEY" in str(exc).upper()
+
+
 class DuplicateAccountError(Exception):
     """Raised when an insert/update would violate the (user_id, account_id)
     uniqueness constraint (see db._dedupe_and_index_conversions) — the DB-level
@@ -106,6 +120,8 @@ class ConversionStore:
             )
             conn.commit()
         except sqlite3.IntegrityError as exc:
+            if _is_foreign_key_violation(exc):
+                raise UserGoneError(user_id) from exc
             raise DuplicateAccountError(conversion["account_id"]) from exc
         finally:
             conn.close()
@@ -154,6 +170,10 @@ class ConversionStore:
             try:
                 inserted.append(self.add(user_id, c))
             except DuplicateAccountError:
+                # Skip the colliding row, keep the rest of the batch. Do NOT
+                # widen this to sqlite3.IntegrityError: that would also swallow
+                # the users foreign key (account deleted mid-request) and return
+                # an empty list as if the user had simply chosen nothing.
                 continue
         return inserted
 

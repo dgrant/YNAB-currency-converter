@@ -15,6 +15,7 @@ from .rates import RatesError
 from .routes import admin as admin_routes
 from .routes import conversions
 from .routes import settings as settings_routes
+from .store import UserGoneError
 from .templates import templates
 from .ynab import YNABError
 
@@ -137,6 +138,15 @@ def create_app() -> FastAPI:
             "Try again shortly.",
             status_code=502,
         )
+
+    @app.exception_handler(UserGoneError)
+    async def user_gone(request: Request, exc: UserGoneError) -> Response:
+        # The account was deleted while this request was in flight. Nothing was
+        # written (the foreign key saw to that); the session is dead, so send
+        # them to /login rather than rendering an error page for an account
+        # that no longer exists.
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
 
     @app.exception_handler(RatesError)
     async def rates_error(request: Request, exc: RatesError) -> Response:

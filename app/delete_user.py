@@ -29,7 +29,7 @@ settings.
 """
 import sys
 
-from . import db, events
+from . import auth, db, events
 from .config import get_settings
 from .users import UserStore
 
@@ -47,6 +47,7 @@ def delete_user(email: str) -> str:
         # success line for work that didn't happen.
         raise SystemExit(f"{user.email} disappeared mid-delete — nothing to do.")
     events.record_event(settings.data_dir, user.id, events.ACCOUNT_DELETED, detail="admin")
+    auth.clear_login_failures(user.email)  # the email is a live throttle key
     # Compaction lives here, not in UserStore.delete: VACUUM rewrites the whole
     # file under an exclusive lock, which is fine for an operator running one
     # command and unacceptable on a request path. It reclaims pages freed

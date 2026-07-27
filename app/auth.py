@@ -11,6 +11,9 @@ from .templates import templates
 from .users import User, UserStore, hash_password, normalize_email, verify_password
 
 MIN_PASSWORD_LENGTH = 8
+# RFC-max address length; signup enforces it and login rejects anything longer
+# before it can become a throttle key (see login()).
+MAX_EMAIL_LENGTH = 254
 
 # Brute-force throttles for password checks (in-memory, single process): after
 # LOCKOUT_THRESHOLD consecutive failures for a key, each further failure doubles
@@ -43,20 +46,33 @@ def _reset_throttle() -> None:
 
 
 def _throttle_entry(store: dict[str, dict], key: str) -> dict:
+    """The entry for `key`, creating it if needed and sweeping IDLE entries
+    when the store is over its cap.
+
+    The sweep is a decay on last activity, not an eviction. Two ways to get
+    this wrong, both verified against this code:
+
+    - Evicting the entry closest to expiring (to make the cap a hard ceiling)
+      hands an attacker a lockout bypass: flooding /login with junk keys
+      hammered to the 300s cap pushes out a victim locked at the threshold,
+      whose lockout is only 2s, and their backoff resets.
+    - Sweeping on `locked_until < now` alone is the same bug one step earlier.
+      A counter below the threshold has `locked_until == 0.0`, which is always
+      in the past, so a flood wipes victims *while they are still accumulating*
+      and they never reach a lockout at all.
+
+    Decaying on `last_failure` drops neither: an entry doing work is never
+    touched, and nothing that is merely full stops a new key being tracked.
+    Store size is then bounded by keys that have cost an attacker a scrypt hash
+    within LOCKOUT_MAX_SECONDS, which is the CPU limit, not a memory one.
+    """
     if key not in store and len(store) >= _MAX_TRACKED_KEYS:
-        # Drop expired entries rather than grow without bound.
-        now = time.monotonic()
-        for expired in [k for k, v in store.items() if v["locked_until"] < now]:
-            del store[expired]
-        # Expiry alone is not a bound: an attacker who keeps every tracked key
-        # actively locked leaves nothing expired to sweep, and the dict grows
-        # past the cap regardless (measured: 2500 entries against a cap of
-        # 1000). Evict the entry closest to expiring so the cap is real. That
-        # entry is the one whose lockout was about to lapse anyway, so this
-        # costs an attacker nothing they weren't already getting.
-        if len(store) >= _MAX_TRACKED_KEYS:
-            del store[min(store, key=lambda k: store[k]["locked_until"])]
-    return store.setdefault(key, {"failures": 0, "locked_until": 0.0})
+        cutoff = time.monotonic() - LOCKOUT_MAX_SECONDS
+        for idle in [k for k, v in store.items() if v["last_failure"] < cutoff]:
+            del store[idle]
+    return store.setdefault(
+        key, {"failures": 0, "locked_until": 0.0, "last_failure": time.monotonic()}
+    )
 
 
 def _lockout_remaining(store: dict[str, dict], key: str) -> int:
@@ -69,6 +85,7 @@ def _lockout_remaining(store: dict[str, dict], key: str) -> int:
 def _record_failure(store: dict[str, dict], key: str) -> None:
     entry = _throttle_entry(store, key)
     entry["failures"] += 1
+    entry["last_failure"] = time.monotonic()
     if entry["failures"] >= LOCKOUT_THRESHOLD:
         # Clamp the exponent (not just the result): failures grows without
         # bound, and 2.0 ** ~1024 would raise OverflowError before min() ran.
@@ -103,6 +120,15 @@ def record_password_failure(user_id: str) -> None:
 
 def clear_password_failures(user_id: str) -> None:
     _reauth_throttle.pop(user_id, None)
+
+
+def clear_login_failures(email: str) -> None:
+    """Drop a deleted account's login-throttle entry. The key IS the email
+    address, and it survives until a successful login or an idle sweep, so
+    without this a deleted user's address sits in the worker's heap
+    indefinitely — against a privacy policy that promises the email is removed
+    immediately."""
+    _login_throttle.pop(normalize_email(email), None)
 
 
 def get_user_store() -> UserStore:
@@ -205,7 +231,7 @@ def signup(
             request, "signup.html", {"error": message, "email": email}, status_code=status_code
         )
 
-    if "@" not in email or len(email) < 3 or len(email) > 254:
+    if "@" not in email or len(email) < 3 or len(email) > MAX_EMAIL_LENGTH:
         return error("Enter a valid email address.", 400)
     if len(password) < MIN_PASSWORD_LENGTH:
         return error(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.", 400)
@@ -230,6 +256,18 @@ def login_form(request: Request):
 @router.post("/login")
 def login(request: Request, email: str = Form(...), password: str = Form(...)):
     email = normalize_email(email)
+    if len(email) > MAX_EMAIL_LENGTH:
+        # The submitted email becomes a throttle dict key, so an unbounded one
+        # makes the entry size attacker-controlled (measured: 1 MiB keys, 500
+        # entries, 510 MB). signup() already caps at the same length, so no
+        # real account can have an address this long and rejecting it early
+        # leaks nothing that the generic 401 below doesn't.
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"error": "Incorrect email or password.", "email": ""},
+            status_code=401,
+        )
     if _is_locked(_login_throttle, email):
         return templates.TemplateResponse(
             request,

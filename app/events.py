@@ -55,11 +55,29 @@ def record_event(
     try:
         conn = db.connect(data_dir)
         try:
-            conn.execute(
-                "INSERT INTO events (id, user_id, event_type, count, detail) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (uuid.uuid4().hex, user_id, event_type, count, detail),
-            )
+            event_id = uuid.uuid4().hex
+            if user_id is None or event_type == ACCOUNT_DELETED:
+                # A failed-login event has no user, and account_deleted is the
+                # deliberate orphan written *after* the row is gone.
+                conn.execute(
+                    "INSERT INTO events (id, user_id, event_type, count, detail) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (event_id, user_id, event_type, count, detail),
+                )
+            else:
+                # Every other event is recorded on its own connection AFTER the
+                # action it describes has committed. If the account is deleted in
+                # that window (two tabs: one applying, one deleting), an
+                # unconditional INSERT lands a row for a user who no longer
+                # exists — and conversion events carry a real YNAB account id in
+                # `detail`, so it outlives the account forever and falsifies the
+                # privacy policy. `events` has no FK to lean on (see db.SCHEMA),
+                # so make the insert itself conditional.
+                conn.execute(
+                    "INSERT INTO events (id, user_id, event_type, count, detail) "
+                    "SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM users WHERE id = ?)",
+                    (event_id, user_id, event_type, count, detail, user_id),
+                )
             conn.commit()
         finally:
             conn.close()

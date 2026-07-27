@@ -129,16 +129,18 @@ def delete_account(
         auth.record_password_failure(user.id)
         return _settings_response(request, user, error=WRONG_PASSWORD_ERROR, status_code=403)
     auth.clear_password_failures(user.id)
-    # The bool return is ignored here (unlike the CLI, which reports a typo):
-    # False just means a concurrent request won the race, and the account is
-    # gone either way, which is all this user asked for.
-    get_user_store().delete(user.id)
-    # Recorded after the delete, so a failure there leaves no "deleted" row for
-    # a live account. This is the one row that outlives the user: a dangling
-    # uuid and a date, recording that a deletion happened, not whose.
-    events.record_event(
-        get_settings().data_dir, user.id, events.ACCOUNT_DELETED, detail="self"
-    )
+    # Gate the marker on the delete actually removing a row: a double-submit
+    # (two tabs, or an impatient second click) otherwise records the deletion
+    # twice for one account, and the row exists to count deletions. The user
+    # still gets the confirmation either way — the account is gone.
+    if get_user_store().delete(user.id):
+        # Recorded after the delete, so a failure there leaves no "deleted" row
+        # for a live account. This is the one row that outlives the user: a
+        # dangling uuid and a date, recording that a deletion happened, not whose.
+        events.record_event(
+            get_settings().data_dir, user.id, events.ACCOUNT_DELETED, detail="self"
+        )
+    auth.clear_login_failures(user.email)
     # clear() first, then the flag: the confirmation is a one-shot session
     # value, so a crafted URL can't show a stranger "your account was deleted".
     request.session.clear()
