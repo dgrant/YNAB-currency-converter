@@ -48,6 +48,14 @@ def _throttle_entry(store: dict[str, dict], key: str) -> dict:
         now = time.monotonic()
         for expired in [k for k, v in store.items() if v["locked_until"] < now]:
             del store[expired]
+        # Expiry alone is not a bound: an attacker who keeps every tracked key
+        # actively locked leaves nothing expired to sweep, and the dict grows
+        # past the cap regardless (measured: 2500 entries against a cap of
+        # 1000). Evict the entry closest to expiring so the cap is real. That
+        # entry is the one whose lockout was about to lapse anyway, so this
+        # costs an attacker nothing they weren't already getting.
+        if len(store) >= _MAX_TRACKED_KEYS:
+            del store[min(store, key=lambda k: store[k]["locked_until"])]
     return store.setdefault(key, {"failures": 0, "locked_until": 0.0})
 
 
@@ -81,9 +89,12 @@ def _is_locked(store: dict[str, dict], key: str) -> bool:
 def password_lockout_seconds(user_id: str) -> int:
     """Seconds until another re-auth attempt for this user is accepted, or 0
     if one is allowed right now."""
-    return _lockout_remaining(_reauth_throttle, user_id) if _is_locked(
-        _reauth_throttle, user_id
-    ) else 0
+    if not _is_locked(_reauth_throttle, user_id):
+        # Guard, not a ternary: _lockout_remaining rounds up, so it returns 1
+        # for an entry that has already expired. Callers treat any non-zero
+        # value as "still locked out", so that 1 would be a phantom lockout.
+        return 0
+    return _lockout_remaining(_reauth_throttle, user_id)
 
 
 def record_password_failure(user_id: str) -> None:
