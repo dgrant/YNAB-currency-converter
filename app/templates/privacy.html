@@ -74,9 +74,11 @@
     account yourself at any time from the Settings page — this immediately and
     permanently removes your email address, password hash, YNAB tokens,
     conversion settings, and activity history from the database, and overwrites
-    the space they occupied rather than leaving it readable. The only thing kept
-    is a dated note that <em>an</em> account was deleted, which records nothing
-    about who it belonged to.
+    the space they occupied rather than leaving it readable. If another read
+    happens to be in progress at that moment, a copy can briefly remain in the
+    database's write-ahead log until the next checkpoint clears it, normally
+    within seconds. The only thing kept is a dated note that <em>an</em> account
+    was deleted, which records nothing about who it belonged to.
   </p>
   <p>
     Deleting your account does not change anything in YNAB itself: transactions
